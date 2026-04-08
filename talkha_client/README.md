@@ -1,4 +1,4 @@
-# TalkHa Client Add-on
+# Ha-expert-Client Add-on
 
 Zdalne narzedzie serwisowe dla Home Assistant.
 

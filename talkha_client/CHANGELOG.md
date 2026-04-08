@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.10
+- UI/Docs: renamed remaining `TalkHa Client` labels to `Ha-expert-Client`.
+
 ## 0.2.9
 - New: `get-entity --entity-id ...` returns a single entity state directly, without reading and filtering the full states dump.
 
