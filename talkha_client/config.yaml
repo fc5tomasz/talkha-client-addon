@@ -1,5 +1,5 @@
 name: TalkHa Client
-version: "0.1.0"
+version: "0.1.1"
 slug: talkha_client
 description: Full remote service agent for TalkHa and TalkHaLokal
 url: https://github.com/fc5tomasz/talkha-client-addon

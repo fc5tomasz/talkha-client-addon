@@ -37,14 +37,14 @@ except Exception as exc:  # pragma: no cover
 from talkha_investigate import run_investigation
 from talkha_przebieg_zdarzen import run_event_timeline
 
-DEFAULT_BASE_DIR = Path("/config")
+DEFAULT_BASE_DIR = Path("/homeassistant")
 DEFAULT_STATE_DIR = Path("/data/.talkhalokal_state")
 DEFAULT_LOG_FILE = Path("/data/talkhalokal.log")
-DEFAULT_BACKUP_ROOT = Path("/config/TalkHaBackup")
-DEFAULT_AUTOMATIONS_FILE = Path("/config/automations.yaml")
-DEFAULT_SCRIPTS_FILE = Path("/config/scripts.yaml")
-DEFAULT_STORAGE_DIR = Path("/config/.storage")
-DEFAULT_LOVELACE_FILE = Path("/config/.storage/lovelace")
+DEFAULT_BACKUP_ROOT = Path("/homeassistant/TalkHaBackup")
+DEFAULT_AUTOMATIONS_FILE = Path("/homeassistant/automations.yaml")
+DEFAULT_SCRIPTS_FILE = Path("/homeassistant/scripts.yaml")
+DEFAULT_STORAGE_DIR = Path("/homeassistant/.storage")
+DEFAULT_LOVELACE_FILE = Path("/homeassistant/.storage/lovelace")
 DEFAULT_HA_HOST = "local-addon"
 DEFAULT_TALKHA_RUNTIME = Path("/opt/talkha/runtime/TalkHa.py")
 

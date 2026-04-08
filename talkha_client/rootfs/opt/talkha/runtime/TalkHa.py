@@ -41,12 +41,12 @@ except Exception:
     yaml = None
 
 
-DEFAULT_BASE_DIR = Path("/config")
+DEFAULT_BASE_DIR = Path("/homeassistant")
 DEFAULT_CONFIG_PATH = Path("/data/.talkha.env")
 DEFAULT_STATE_DIR = Path("/data/.talkha_state")
-DEFAULT_BACKUP_ROOT = Path("/config/TalkHaBackup")
+DEFAULT_BACKUP_ROOT = Path("/homeassistant/TalkHaBackup")
 DEFAULT_LOG_FILE = Path("/data/talkha.log")
-DEFAULT_SECRETS_PATH = Path("/config/secrets.yaml")
+DEFAULT_SECRETS_PATH = Path("/homeassistant/secrets.yaml")
 
 
 HELPER_STORAGE_FILES = {

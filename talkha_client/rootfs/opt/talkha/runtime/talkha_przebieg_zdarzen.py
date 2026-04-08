@@ -16,9 +16,9 @@ except Exception as exc:  # pragma: no cover
     raise SystemExit(f"ERROR: PyYAML not available: {exc}")
 
 
-DEFAULT_AUTOMATIONS_FILE = Path("/home/tomasz/HA/automations.yaml")
-DEFAULT_SCRIPTS_FILE = Path("/home/tomasz/HA/scripts.yaml")
-DEFAULT_HA_BASE_URL = "http://192.168.2.70:8123/api"
+DEFAULT_AUTOMATIONS_FILE = Path("/homeassistant/automations.yaml")
+DEFAULT_SCRIPTS_FILE = Path("/homeassistant/scripts.yaml")
+DEFAULT_HA_BASE_URL = "http://homeassistant.local:8123/api"
 ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-zA-Z0-9_]+\b")
 
 
