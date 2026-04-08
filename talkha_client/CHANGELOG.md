@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.1
+- Bugfix: auto-correct swapped `ha_token` and `client_id` fields if Home Assistant saves them in reverse order.
+
 ## 0.2.0
 - New name: `Ha-expert-Client`
 - Simpler setup: fixed operator endpoint and shared registration token

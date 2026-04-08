@@ -4,6 +4,16 @@ set -euo pipefail
 HA_TOKEN="$(bashio::config 'ha_token')"
 CLIENT_ID="$(bashio::config 'client_id')"
 
+# Some HA UI/save paths can end up swapping the two fields.
+# If client_id looks like a JWT token and ha_token looks like a short id,
+# auto-correct it before starting the agent.
+if [[ "${CLIENT_ID}" == *.*.* && "${HA_TOKEN}" != *.*.* ]]; then
+  TMP_VALUE="${HA_TOKEN}"
+  HA_TOKEN="${CLIENT_ID}"
+  CLIENT_ID="${TMP_VALUE}"
+  echo "Detected swapped add-on fields, auto-correcting ha_token/client_id" >&2
+fi
+
 mkdir -p /data/.talkha_state /data/.talkhalokal_state
 
 export PATH="/opt/talkha/venv/bin:${PATH}"
