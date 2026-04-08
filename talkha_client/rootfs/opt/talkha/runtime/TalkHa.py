@@ -643,7 +643,6 @@ def build_lights_on_report(states: Any) -> Dict[str, Any]:
         blob = f"{entity_id} {friendly_name}".lower()
         include_keywords = (
             "panel",
-            "backlight",
             "podswiet",
             "podświet",
             "light",
@@ -651,6 +650,11 @@ def build_lights_on_report(states: Any) -> Dict[str, Any]:
             "led",
             "oswietl",
             "oświetl",
+            "klawisz",
+            "_l1",
+            "_l2",
+            "_left",
+            "_right",
         )
         exclude_keywords = (
             "power",
@@ -659,6 +663,8 @@ def build_lights_on_report(states: Any) -> Dict[str, Any]:
             "blokada",
             "child_lock",
             "indicator light mode",
+            "backlight_mode",
+            " backlight mode",
         )
         return any(keyword in blob for keyword in include_keywords) and not any(
             keyword in blob for keyword in exclude_keywords

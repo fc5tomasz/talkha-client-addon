@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.16
+- Bugfix: `lights-on-report` no longer treats `*_backlight_mode` helper switches as active visual lights; it now prefers real panel/key switches such as `left/right/l1/l2`.
+
 ## 0.2.15
 - Improved: `lights-on-report` now reports active visual entities, including `light.*` and light-like `switch.*` entities such as panel/backlight states.
 
