@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.18
+- Bugfix: `lights-on-report` now excludes `Multi przelacznik` / `zasilanie` switches, so powered circuits are not mistaken for lit entities.
+
 ## 0.2.17
 - Bugfix: `lights-on-report` now excludes generic `panel` and `zasilanie` switches, so it focuses on real light-like entities such as `lampki`, `led`, `light` and `oświetlenie`.
 

@@ -656,6 +656,8 @@ def build_lights_on_report(states: Any) -> Dict[str, Any]:
             "_right",
         )
         exclude_keywords = (
+            "multi przelacznik",
+            "multi przełącznik",
             "power",
             "zasilanie",
             "permit_join",
