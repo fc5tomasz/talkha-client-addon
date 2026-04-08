@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.4
+- New: `get-script` returns the full YAML block of a script by key or alias.
+- New: `get-automation` returns the full YAML block of an automation by id or alias.
+
 ## 0.2.3
 - New: `TalkHaLokal upsert-script` and `upsert-automation` accept `--block-base64`, so operator can send YAML payload directly without SSH and without creating helper files on the client host.
 

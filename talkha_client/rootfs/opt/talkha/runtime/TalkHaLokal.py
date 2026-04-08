@@ -1725,6 +1725,54 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_get_script(args: argparse.Namespace) -> int:
+    scripts = load_scripts(args.scripts_file)
+    target = (args.target or "").strip()
+    if not target:
+        raise TalkHaLokalError("Provide --target for get-script")
+
+    matches = find_script_keys(scripts, target, args.match_by)
+    if len(matches) > 1:
+        raise TalkHaLokalError(f"Ambiguous script target: {target}")
+    if not matches:
+        raise TalkHaLokalError(f"Script target not found: {target}")
+
+    key = matches[0]
+    body = scripts[key]
+    payload = {
+        "key": key,
+        "alias": str(body.get("alias", "")),
+        "mode": str(body.get("mode", "")),
+        "yaml": render_script_block(key, body),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_get_automation(args: argparse.Namespace) -> int:
+    autos = load_automations(args.automations_file)
+    target = (args.target or "").strip()
+    if not target:
+        raise TalkHaLokalError("Provide --target for get-automation")
+
+    matches = find_automation_matches(autos, target, args.match_by)
+    if len(matches) > 1:
+        raise TalkHaLokalError(f"Ambiguous automation target: {target}")
+    if not matches:
+        raise TalkHaLokalError(f"Automation target not found: {target}")
+
+    index = matches[0]
+    block = autos[index]
+    payload = {
+        "id": str(block.get("id", "")),
+        "alias": str(block.get("alias", "")),
+        "enabled": automation_enabled(block),
+        "yaml": render_automation_block(block),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_investigate(args: argparse.Namespace) -> int:
     result = run_investigation(
         query=args.query,
@@ -1784,6 +1832,14 @@ def build_parser() -> argparse.ArgumentParser:
     s_snap.add_argument("--topic", default="")
     s_snap.add_argument("--limit", type=int, default=25)
     s_snap.add_argument("--entity-limit", type=int, default=120)
+
+    s_gs = sub.add_parser("get-script", help="Get full script block by key or alias")
+    s_gs.add_argument("--target", required=True)
+    s_gs.add_argument("--match-by", choices=["key", "alias", "key-or-alias"], default="key-or-alias")
+
+    s_ga = sub.add_parser("get-automation", help="Get full automation block by id or alias")
+    s_ga.add_argument("--target", required=True)
+    s_ga.add_argument("--match-by", choices=["id", "alias", "id-or-alias"], default="id-or-alias")
 
     s_inv = sub.add_parser("investigate", help="Compact read-only investigation for automations/scripts/entities")
     s_inv.add_argument("--query", required=True)
@@ -1865,6 +1921,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_find(args)
         if args.cmd == "snapshot":
             return cmd_snapshot(args)
+        if args.cmd == "get-script":
+            return cmd_get_script(args)
+        if args.cmd == "get-automation":
+            return cmd_get_automation(args)
         if args.cmd == "investigate":
             return cmd_investigate(args)
         if args.cmd == "przebieg-zdarzen-ha":
