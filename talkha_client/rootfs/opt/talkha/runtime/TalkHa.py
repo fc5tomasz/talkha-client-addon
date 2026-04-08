@@ -32,6 +32,7 @@ from getpass import getpass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
+from urllib.request import Request, urlopen
 
 import websockets
 
@@ -562,13 +563,85 @@ def normalize_message_kind(value: str) -> str:
     return kind
 
 
-def build_zigbee_status_report(states: Any) -> Dict[str, Any]:
+def _supervisor_api_get(path: str) -> Any:
+    token = os.environ.get("SUPERVISOR_TOKEN", "").strip()
+    if not token:
+        raise TalkHaError("Missing SUPERVISOR_TOKEN for Supervisor API access")
+    req = Request(
+        f"http://supervisor{path}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    if not isinstance(payload, dict) or payload.get("result") != "ok":
+        raise TalkHaError(f"Supervisor API failed for {path}")
+    return payload.get("data")
+
+
+def _normalize_bridge_label(value: str) -> str:
+    text = (value or "").strip().casefold()
+    text = re.sub(r"^zigbee2mqtt\s*", "", text)
+    text = re.sub(r"^connection state\s*", "", text)
+    text = re.sub(r"[^a-z0-9ąćęłńóśźż]+", " ", text, flags=re.IGNORECASE)
+    return " ".join(part for part in text.split() if part)
+
+
+def _addon_bridge_hint(addon: Dict[str, Any]) -> str:
+    options = addon.get("options") or {}
+    data_path = str(options.get("data_path", "") or "")
+    hint = ""
+    if data_path:
+        hint = Path(data_path).name.replace("zigbee2mqtt_", "").replace("zigbee_", "")
+    if not hint:
+        name = str(addon.get("name", "") or "")
+        hint = name.replace("Zigbee2MQTT", "").strip()
+    return _normalize_bridge_label(hint)
+
+
+def _get_real_zigbee_addons() -> List[Dict[str, Any]]:
+    data = _supervisor_api_get("/addons")
+    raw_addons = data.get("addons") if isinstance(data, dict) else None
+    if not isinstance(raw_addons, list):
+        raise TalkHaError("Unexpected Supervisor add-on list response")
+
+    addons: List[Dict[str, Any]] = []
+    for raw in raw_addons:
+        if not isinstance(raw, dict):
+            continue
+        slug = str(raw.get("slug", ""))
+        name = str(raw.get("name", ""))
+        if "zigbee2mqtt" not in slug and "zigbee2mqtt" not in name.lower():
+            continue
+        info = _supervisor_api_get(f"/addons/{slug}/info")
+        if not isinstance(info, dict):
+            continue
+        addons.append(
+            {
+                "slug": slug,
+                "name": str(info.get("name", "") or name),
+                "state": str(info.get("state", "") or raw.get("state", "")),
+                "version": str(info.get("version", "") or raw.get("version", "")),
+                "data_path": str((info.get("options") or {}).get("data_path", "") or ""),
+                "bridge_hint": _addon_bridge_hint(info),
+            }
+        )
+    addons.sort(key=lambda item: item.get("name", ""))
+    return addons
+
+
+def build_zigbee_status_report(states: Any, addons: Any) -> Dict[str, Any]:
     if not isinstance(states, list):
         raise TalkHaError("Unexpected get_states response")
+    if not isinstance(addons, list):
+        raise TalkHaError("Unexpected Zigbee add-on list response")
 
-    bridge_rows: Dict[str, Dict[str, Any]] = {}
+    bridge_candidates: Dict[str, Dict[str, Any]] = {}
     offline_entities: List[Dict[str, Any]] = []
     online_like_entities: List[Dict[str, Any]] = []
+    bridge_entity_ids: set[str] = set()
 
     def _bridge_key(entity_id: str) -> str:
         for prefix in (
@@ -607,10 +680,12 @@ def build_zigbee_status_report(states: Any) -> Dict[str, Any]:
         bridge_key = _bridge_key(entity_id)
         if not bridge_key:
             continue
-        bridge = bridge_rows.setdefault(
+        bridge_entity_ids.add(entity_id)
+        bridge = bridge_candidates.setdefault(
             bridge_key,
             {
                 "bridge_key": bridge_key,
+                "bridge_hint": _normalize_bridge_label(friendly_name),
                 "connection_state_entity": "",
                 "connection_state": "",
                 "version_entity": "",
@@ -639,9 +714,9 @@ def build_zigbee_status_report(states: Any) -> Dict[str, Any]:
         if state_text in {"unavailable", "unknown"}:
             bridge["offline_entities"].append(item)
 
-    bridges = list(bridge_rows.values())
-    bridges.sort(key=lambda row: row.get("bridge_key", ""))
-    for bridge in bridges:
+    candidates = list(bridge_candidates.values())
+    candidates.sort(key=lambda row: row.get("bridge_key", ""))
+    for bridge in candidates:
         state = str(bridge.get("connection_state", ""))
         bridge["online"] = state == "on"
         if state == "off":
@@ -651,17 +726,70 @@ def build_zigbee_status_report(states: Any) -> Dict[str, Any]:
         else:
             bridge["status"] = "online"
 
+    unmatched_candidates = candidates[:]
+    bridges: List[Dict[str, Any]] = []
+    for addon in addons:
+        hint = _normalize_bridge_label(str(addon.get("bridge_hint", "")))
+        matched = None
+        if hint:
+            for candidate in unmatched_candidates:
+                candidate_hint = _normalize_bridge_label(str(candidate.get("bridge_hint", "")))
+                if hint and hint in candidate_hint:
+                    matched = candidate
+                    break
+        if matched is None and len(unmatched_candidates) == 1:
+            matched = unmatched_candidates[0]
+
+        bridge = {
+            "addon_slug": addon.get("slug", ""),
+            "addon_name": addon.get("name", ""),
+            "addon_state": addon.get("state", ""),
+            "addon_version": addon.get("version", ""),
+            "data_path": addon.get("data_path", ""),
+            "bridge_hint": addon.get("bridge_hint", ""),
+            "real_addon": True,
+        }
+        if matched is not None:
+            bridge.update(matched)
+            unmatched_candidates.remove(matched)
+        else:
+            bridge.update(
+                {
+                    "connection_state_entity": "",
+                    "connection_state": "",
+                    "version_entity": "",
+                    "version": "",
+                    "permit_join_entity": "",
+                    "permit_join": "",
+                    "restart_entity": "",
+                    "log_level_entity": "",
+                    "offline_entities": [],
+                    "online": False,
+                    "status": "missing_runtime_entity",
+                }
+            )
+        bridges.append(bridge)
+
+    orphan_bridges: List[Dict[str, Any]] = []
+    for candidate in unmatched_candidates:
+        orphan = dict(candidate)
+        orphan["real_addon"] = False
+        orphan["status"] = "orphan_runtime_entity"
+        orphan_bridges.append(orphan)
+
     return {
         "ok": True,
         "podsumowanie": {
             "mostki_wykryte": len(bridges),
             "mostki_online": sum(1 for row in bridges if row.get("status") == "online"),
             "mostki_offline": sum(1 for row in bridges if row.get("status") == "offline"),
+            "mostki_osierocone": len(orphan_bridges),
             "encje_zigbee_offline": len(offline_entities),
         },
         "mostki": bridges,
+        "mostki_osierocone": orphan_bridges,
         "encje_offline": offline_entities,
-        "encje_online_like": online_like_entities[:80],
+        "encje_online_like": [item for item in online_like_entities[:80] if item["entity_id"] not in bridge_entity_ids],
     }
 
 
@@ -1729,7 +1857,8 @@ async def run_async(args: argparse.Namespace) -> int:
         if args.cmd == "zigbee-status-report":
             ctx = await ensure_ws()
             states = await ws_success(ctx, {"type": "get_states"})
-            report = build_zigbee_status_report(states)
+            addons = _get_real_zigbee_addons()
+            report = build_zigbee_status_report(states, addons)
             print(json.dumps(report, ensure_ascii=False, indent=2))
             return 0
 

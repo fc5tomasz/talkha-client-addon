@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.12
+- Improved: `zigbee-status-report` now maps real Zigbee2MQTT add-ons from Supervisor, returns exact add-on names and separates orphan Zigbee bridge entities from real active bridges.
+
 ## 0.2.11
 - New: `zigbee-status-report` returns Zigbee bridge online/offline summary and offline Zigbee entities without manual filtering.
 
