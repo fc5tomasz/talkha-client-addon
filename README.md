@@ -2,6 +2,8 @@
 
 Repozytorium add-onu Home Assistant dla zdalnej pracy serwisowej `TalkHa`.
 
+Autor: Tomasz Furdal, HA Expert
+
 Klient:
 1. dodaje to repo do Add-on Store,
 2. instaluje `TalkHa Client`,
