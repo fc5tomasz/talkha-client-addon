@@ -2,7 +2,8 @@ ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.12-alpine3.21
 FROM ${BUILD_FROM}
 
 RUN apk add --no-cache bash curl mariadb-client openssh-client py3-pip
-RUN python3 -m pip install --no-cache-dir aiohttp PyYAML websockets
+RUN python3 -m venv /opt/talkha/venv \
+    && /opt/talkha/venv/bin/python -m pip install --no-cache-dir aiohttp PyYAML websockets
 
 COPY rootfs /
 
