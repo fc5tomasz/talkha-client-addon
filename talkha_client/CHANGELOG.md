@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.17
+- Bugfix: `lights-on-report` now excludes generic `panel` and `zasilanie` switches, so it focuses on real light-like entities such as `lampki`, `led`, `light` and `oświetlenie`.
+
 ## 0.2.16
 - Bugfix: `lights-on-report` no longer treats `*_backlight_mode` helper switches as active visual lights; it now prefers real panel/key switches such as `left/right/l1/l2`.
 
