@@ -18,7 +18,7 @@ except Exception as exc:  # pragma: no cover
 
 DEFAULT_AUTOMATIONS_FILE = Path("/homeassistant/automations.yaml")
 DEFAULT_SCRIPTS_FILE = Path("/homeassistant/scripts.yaml")
-DEFAULT_HA_BASE_URL = "http://homeassistant.local:8123/api"
+DEFAULT_HA_BASE_URL = "http://supervisor/core/api"
 ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-zA-Z0-9_]+\b")
 
 

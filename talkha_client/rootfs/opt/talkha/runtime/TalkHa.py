@@ -247,7 +247,8 @@ def ws_url_from_ha_url(ha_url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         raise TalkHaError(f"Invalid HA_URL: {ha_url}")
     scheme = "wss" if parsed.scheme == "https" else "ws"
-    return f"{scheme}://{parsed.netloc}/api/websocket"
+    base_path = parsed.path.rstrip("/")
+    return f"{scheme}://{parsed.netloc}{base_path}/api/websocket"
 
 
 async def connect_and_auth(creds: Credentials) -> WsCtx:

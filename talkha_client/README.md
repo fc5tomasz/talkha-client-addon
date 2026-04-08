@@ -7,13 +7,10 @@ Autor: Tomasz Furdal, ha-expert.com
 ## Instalacja u klienta
 
 1. Dodac repo add-onow.
-2. Zainstalowac `TalkHa Client`.
+2. Zainstalowac `Ha-expert-Client`.
 3. Wpisac:
-   - `ha_url`
    - `ha_token`
-   - `operator_url`
    - `client_id`
-   - `registration_token`
 4. Uruchomic add-on.
 
 ## Dzialanie

@@ -1,5 +1,5 @@
-name: TalkHa Client
-version: "0.1.3"
+name: Ha-expert-Client
+version: "0.2.0"
 slug: talkha_client
 description: Full remote service agent for TalkHa and TalkHaLokal
 url: https://github.com/fc5tomasz/talkha-client-addon
@@ -15,22 +15,8 @@ map:
   - type: homeassistant_config
     read_only: false
 options:
-  ha_url: "http://homeassistant.local:8123"
   ha_token: ""
-  operator_url: "https://operator.ha-expert.com"
   client_id: ""
-  registration_token: ""
-  mode: "full"
-  allow_mutations: true
-  local_db_mode: true
-  poll_interval: 10
 schema:
-  ha_url: str
   ha_token: str
-  operator_url: str
   client_id: str
-  registration_token: str
-  mode: str
-  allow_mutations: bool
-  local_db_mode: bool
-  poll_interval: int
