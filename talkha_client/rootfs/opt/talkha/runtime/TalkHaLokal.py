@@ -1812,6 +1812,44 @@ def cmd_event_timeline(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_diagnoza_automatyzacji(args: argparse.Namespace) -> int:
+    result = run_investigation(
+        query=args.target,
+        from_time=args.from_time,
+        to_time=args.to_time,
+        trace_limit=args.trace_limit,
+        state_limit=args.state_limit,
+        tx_limit=args.tx_limit,
+        automations_file=args.automations_file,
+        scripts_file=args.scripts_file,
+        storage_dir=args.storage_dir,
+        state_dir=args.state_dir,
+        talkha_runtime=args.talkha_runtime,
+    )
+    matches = result.get("dopasowania", {}).get("automatyzacje", [])
+    if args.match_by == "alias":
+        matches = [row for row in matches if str(row.get("alias", "")).strip() == args.target.strip()]
+    elif args.match_by == "id":
+        matches = [row for row in matches if str(row.get("id", "")).strip() == args.target.strip()]
+    if not matches:
+        raise TalkHaLokalError(f"Automation target not found: {args.target}")
+
+    payload = {
+        "target": args.target,
+        "match_by": args.match_by,
+        "automatyzacje": matches,
+        "stany": result.get("stany_runtime", []),
+        "trace": result.get("trace", []),
+        "transakcje": result.get("transakcje", []),
+        "fakty": result.get("fakty", []),
+        "timeline": result.get("timeline", []),
+        "braki_dowodowe": result.get("braki_dowodowe", []),
+        "wniosek": result.get("wniosek", ""),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="TalkHaLokal local HA operator")
     p.add_argument("--base-dir", type=Path, default=DEFAULT_BASE_DIR)
@@ -1847,6 +1885,15 @@ def build_parser() -> argparse.ArgumentParser:
     s_ga = sub.add_parser("get-automation", help="Get full automation block by id or alias")
     s_ga.add_argument("--target", required=True)
     s_ga.add_argument("--match-by", choices=["id", "alias", "id-or-alias"], default="alias")
+
+    s_daig = sub.add_parser("diagnoza-automatyzacji", help="Diagnose one automation by alias or id")
+    s_daig.add_argument("--target", required=True)
+    s_daig.add_argument("--match-by", choices=["id", "alias"], default="alias")
+    s_daig.add_argument("--from-time", default="")
+    s_daig.add_argument("--to-time", default="")
+    s_daig.add_argument("--trace-limit", type=int, default=5)
+    s_daig.add_argument("--state-limit", type=int, default=20)
+    s_daig.add_argument("--tx-limit", type=int, default=10)
 
     s_inv = sub.add_parser("investigate", help="Compact read-only investigation for automations/scripts/entities")
     s_inv.add_argument("--query", required=True)
@@ -1932,6 +1979,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_get_script(args)
         if args.cmd == "get-automation":
             return cmd_get_automation(args)
+        if args.cmd == "diagnoza-automatyzacji":
+            return cmd_diagnoza_automatyzacji(args)
         if args.cmd == "investigate":
             return cmd_investigate(args)
         if args.cmd == "przebieg-zdarzen-ha":

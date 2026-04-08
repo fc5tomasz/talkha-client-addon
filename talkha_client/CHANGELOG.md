@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.6
+- New: `diagnoza-automatyzacji` for practical per-client automation diagnosis by alias or id.
+
 ## 0.2.5
 - New rule: when adding a new script, `alias` is required.
 - New rule: when adding a new automation, `alias` is required.
