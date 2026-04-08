@@ -562,6 +562,109 @@ def normalize_message_kind(value: str) -> str:
     return kind
 
 
+def build_zigbee_status_report(states: Any) -> Dict[str, Any]:
+    if not isinstance(states, list):
+        raise TalkHaError("Unexpected get_states response")
+
+    bridge_rows: Dict[str, Dict[str, Any]] = {}
+    offline_entities: List[Dict[str, Any]] = []
+    online_like_entities: List[Dict[str, Any]] = []
+
+    def _bridge_key(entity_id: str) -> str:
+        for prefix in (
+            "binary_sensor.zigbee2mqtt_bridge_connection_state",
+            "button.zigbee2mqtt_bridge_restart",
+            "select.zigbee2mqtt_bridge_log_level",
+            "sensor.zigbee2mqtt_bridge_version",
+            "switch.zigbee2mqtt_bridge_permit_join",
+        ):
+            if entity_id.startswith(prefix):
+                suffix = entity_id[len(prefix):]
+                return suffix or "_1"
+        return ""
+
+    for row in states:
+        if not isinstance(row, dict):
+            continue
+        entity_id = str(row.get("entity_id", ""))
+        attrs = row.get("attributes") or {}
+        friendly_name = str(attrs.get("friendly_name", ""))
+        blob = f"{entity_id} {friendly_name}".lower()
+        if "zigbee" not in blob:
+            continue
+
+        item = {
+            "entity_id": entity_id,
+            "state": row.get("state"),
+            "friendly_name": friendly_name,
+        }
+        state_text = str(row.get("state"))
+        if state_text in {"unavailable", "unknown"}:
+            offline_entities.append(item)
+        else:
+            online_like_entities.append(item)
+
+        bridge_key = _bridge_key(entity_id)
+        if not bridge_key:
+            continue
+        bridge = bridge_rows.setdefault(
+            bridge_key,
+            {
+                "bridge_key": bridge_key,
+                "connection_state_entity": "",
+                "connection_state": "",
+                "version_entity": "",
+                "version": "",
+                "permit_join_entity": "",
+                "permit_join": "",
+                "restart_entity": "",
+                "log_level_entity": "",
+                "offline_entities": [],
+            },
+        )
+        if entity_id.startswith("binary_sensor.zigbee2mqtt_bridge_connection_state"):
+            bridge["connection_state_entity"] = entity_id
+            bridge["connection_state"] = state_text
+        elif entity_id.startswith("sensor.zigbee2mqtt_bridge_version"):
+            bridge["version_entity"] = entity_id
+            bridge["version"] = state_text
+        elif entity_id.startswith("switch.zigbee2mqtt_bridge_permit_join"):
+            bridge["permit_join_entity"] = entity_id
+            bridge["permit_join"] = state_text
+        elif entity_id.startswith("button.zigbee2mqtt_bridge_restart"):
+            bridge["restart_entity"] = entity_id
+        elif entity_id.startswith("select.zigbee2mqtt_bridge_log_level"):
+            bridge["log_level_entity"] = entity_id
+
+        if state_text in {"unavailable", "unknown"}:
+            bridge["offline_entities"].append(item)
+
+    bridges = list(bridge_rows.values())
+    bridges.sort(key=lambda row: row.get("bridge_key", ""))
+    for bridge in bridges:
+        state = str(bridge.get("connection_state", ""))
+        bridge["online"] = state == "on"
+        if state == "off":
+            bridge["status"] = "offline"
+        elif state in {"unknown", "unavailable", ""}:
+            bridge["status"] = "unknown"
+        else:
+            bridge["status"] = "online"
+
+    return {
+        "ok": True,
+        "podsumowanie": {
+            "mostki_wykryte": len(bridges),
+            "mostki_online": sum(1 for row in bridges if row.get("status") == "online"),
+            "mostki_offline": sum(1 for row in bridges if row.get("status") == "offline"),
+            "encje_zigbee_offline": len(offline_entities),
+        },
+        "mostki": bridges,
+        "encje_offline": offline_entities,
+        "encje_online_like": online_like_entities[:80],
+    }
+
+
 def build_message_history(
     rows: List[str],
     from_time: dt.datetime,
@@ -1623,6 +1726,13 @@ async def run_async(args: argparse.Namespace) -> int:
             print(json.dumps(target, ensure_ascii=False, indent=2))
             return 0
 
+        if args.cmd == "zigbee-status-report":
+            ctx = await ensure_ws()
+            states = await ws_success(ctx, {"type": "get_states"})
+            report = build_zigbee_status_report(states)
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0
+
         if args.cmd == "helper-upsert":
             require_explicit(args.explicit_confirm, "helper-upsert")
             item = parse_json_arg(args.item_json, "--item-json")
@@ -2077,6 +2187,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ge = sub.add_parser("get-entity", help="Return single entity state by entity_id")
     p_ge.add_argument("--entity-id", required=True)
+
+    sub.add_parser("zigbee-status-report", help="Summarize Zigbee bridge online/offline status from runtime states")
 
     p_hu = sub.add_parser("helper-upsert", help="Create/update GUI helper over WebSocket/API")
     p_hu.add_argument("--kind", required=True, choices=sorted(HELPER_STORAGE_FILES.keys()))

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.11
+- New: `zigbee-status-report` returns Zigbee bridge online/offline summary and offline Zigbee entities without manual filtering.
+
 ## 0.2.10
 - UI/Docs: renamed remaining `TalkHa Client` labels to `Ha-expert-Client`.
 
