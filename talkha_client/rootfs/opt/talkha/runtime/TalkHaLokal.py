@@ -1801,14 +1801,42 @@ def cmd_investigate(args: argparse.Namespace) -> int:
 def cmd_event_timeline(args: argparse.Namespace) -> int:
     result = run_event_timeline(
         entities=args.entities,
-        from_time=args.from_time,
-        to_time=args.to_time,
+        from_time=args.from_time.replace(" ", "T"),
+        to_time=args.to_time.replace(" ", "T") if args.to_time else "",
         limit=args.limit,
         automations_file=args.automations_file,
         scripts_file=args.scripts_file,
         ha_base_url=args.ha_base_url,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_why_light_on(args: argparse.Namespace) -> int:
+    result = run_investigation(
+        query=args.entity_id,
+        from_time=args.from_time,
+        to_time=args.to_time,
+        trace_limit=args.trace_limit,
+        state_limit=args.state_limit,
+        tx_limit=args.tx_limit,
+        automations_file=args.automations_file,
+        scripts_file=args.scripts_file,
+        storage_dir=args.storage_dir,
+        state_dir=args.state_dir,
+        talkha_runtime=args.talkha_runtime,
+    )
+    payload = {
+        "entity_id": args.entity_id,
+        "stany": [row for row in result.get("stany", []) if str(row.get("entity_id", "")) == args.entity_id],
+        "powiazane_automatyzacje": result.get("dopasowania", {}).get("automatyzacje", []),
+        "powiazane_skrypty": result.get("dopasowania", {}).get("skrypty", []),
+        "trace": result.get("trace", []),
+        "timeline": result.get("os_czasu", []),
+        "fakty": result.get("fakty", []),
+        "wniosek": result.get("wniosek", ""),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1911,6 +1939,14 @@ def build_parser() -> argparse.ArgumentParser:
     s_evt.add_argument("--to-time", default="")
     s_evt.add_argument("--limit", type=int, default=120)
 
+    s_wlo = sub.add_parser("why-light-on", help="Explain why a selected light entity is currently on")
+    s_wlo.add_argument("--entity-id", required=True)
+    s_wlo.add_argument("--from-time", default="")
+    s_wlo.add_argument("--to-time", default="")
+    s_wlo.add_argument("--trace-limit", type=int, default=5)
+    s_wlo.add_argument("--state-limit", type=int, default=20)
+    s_wlo.add_argument("--tx-limit", type=int, default=10)
+
     s_lf = sub.add_parser("lovelace-find-card", help="Find Lovelace cards by exact title in storage dashboard")
     s_lf.add_argument("--dashboard-file", type=Path, default=DEFAULT_LOVELACE_FILE)
     s_lf.add_argument("--title", required=True)
@@ -1987,6 +2023,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_investigate(args)
         if args.cmd == "przebieg-zdarzen-ha":
             return cmd_event_timeline(args)
+        if args.cmd == "why-light-on":
+            return cmd_why_light_on(args)
         if args.cmd == "lovelace-find-card":
             return cmd_lovelace_find_card(args)
         if args.cmd == "lovelace-replace-entities-in-card":

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.14
+- New: `lights-on-report` returns all active `light.*` entities with friendly names and timestamps.
+- New: `why-light-on --entity-id ...` provides a compact explanation for why a specific light is currently on.
+- Bugfix: `przebieg-zdarzen-ha` now accepts time values written with a space, not only ISO `T`.
+
 ## 0.2.13
 - Bugfix: add-on now requests `hassio_role: manager`, so `zigbee-status-report` can read real Zigbee2MQTT add-ons from Supervisor and report exact bridge names without helper filtering.
 

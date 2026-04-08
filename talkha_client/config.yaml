@@ -1,5 +1,5 @@
 name: Ha-expert-Client
-version: "0.2.13"
+version: "0.2.14"
 slug: talkha_client
 description: Full remote service agent for TalkHa and TalkHaLokal
 url: https://github.com/fc5tomasz/talkha-client-addon

@@ -632,6 +632,40 @@ def _get_real_zigbee_addons() -> List[Dict[str, Any]]:
     return addons
 
 
+def build_lights_on_report(states: Any) -> Dict[str, Any]:
+    if not isinstance(states, list):
+        raise TalkHaError("Unexpected get_states response")
+    lights: List[Dict[str, Any]] = []
+    for row in states:
+        if not isinstance(row, dict):
+            continue
+        entity_id = str(row.get("entity_id", ""))
+        if not entity_id.startswith("light."):
+            continue
+        if str(row.get("state", "")) != "on":
+            continue
+        attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+        lights.append(
+            {
+                "entity_id": entity_id,
+                "friendly_name": str(attrs.get("friendly_name", "") or entity_id),
+                "last_changed": str(row.get("last_changed", "")),
+                "brightness": attrs.get("brightness"),
+                "color_mode": attrs.get("color_mode"),
+                "supported_color_modes": attrs.get("supported_color_modes", []),
+                "context": row.get("context", {}),
+            }
+        )
+    lights.sort(key=lambda item: (item.get("friendly_name", ""), item.get("entity_id", "")))
+    return {
+        "ok": True,
+        "podsumowanie": {
+            "swiatla_wlaczone": len(lights),
+        },
+        "swiatla": lights,
+    }
+
+
 def build_zigbee_status_report(states: Any, addons: Any) -> Dict[str, Any]:
     if not isinstance(states, list):
         raise TalkHaError("Unexpected get_states response")
@@ -1854,6 +1888,13 @@ async def run_async(args: argparse.Namespace) -> int:
             print(json.dumps(target, ensure_ascii=False, indent=2))
             return 0
 
+        if args.cmd == "lights-on-report":
+            ctx = await ensure_ws()
+            states = await ws_success(ctx, {"type": "get_states"})
+            report = build_lights_on_report(states)
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0
+
         if args.cmd == "zigbee-status-report":
             ctx = await ensure_ws()
             states = await ws_success(ctx, {"type": "get_states"})
@@ -2316,6 +2357,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ge = sub.add_parser("get-entity", help="Return single entity state by entity_id")
     p_ge.add_argument("--entity-id", required=True)
+
+    sub.add_parser("lights-on-report", help="Return all currently active light.* entities")
 
     sub.add_parser("zigbee-status-report", help="Summarize Zigbee bridge online/offline status from runtime states")
 
