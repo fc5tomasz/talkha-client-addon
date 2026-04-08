@@ -10,6 +10,7 @@ Focus:
 from __future__ import annotations
 
 import argparse
+import base64
 from collections import Counter
 from copy import deepcopy
 import datetime as dt
@@ -721,6 +722,32 @@ def parse_block_yaml(path: Path) -> Dict[str, Any]:
     raise TalkHaLokalError("Block file must be YAML mapping or one-item list")
 
 
+def parse_block_text(raw: str) -> Dict[str, Any]:
+    try:
+        obj = yaml.safe_load(raw)
+    except Exception as exc:
+        raise TalkHaLokalError(f"Invalid block YAML text: {exc}") from exc
+    if isinstance(obj, list):
+        if len(obj) != 1 or not isinstance(obj[0], dict):
+            raise TalkHaLokalError("Inline block must contain one YAML mapping")
+        return obj[0]
+    if isinstance(obj, dict):
+        return obj
+    raise TalkHaLokalError("Inline block must be YAML mapping or one-item list")
+
+
+def resolve_block_arg(block_file: Optional[Path], block_base64: str) -> Dict[str, Any]:
+    if block_file:
+        return parse_block_yaml(block_file)
+    if block_base64:
+        try:
+            raw = base64.b64decode(block_base64.encode("utf-8"), validate=True).decode("utf-8")
+        except Exception as exc:
+            raise TalkHaLokalError(f"Invalid --block-base64 payload: {exc}") from exc
+        return parse_block_text(raw)
+    raise TalkHaLokalError("Provide --block-file or --block-base64")
+
+
 def canonical_json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -1089,7 +1116,7 @@ def find_script_keys(scripts: Dict[str, Dict[str, Any]], target: str, match_by: 
 def cmd_upsert_automation(args: argparse.Namespace, txm: TxManager) -> int:
     autos_before = load_automations(args.automations_file)
     autos = [dict(x) for x in autos_before]
-    block = parse_block_yaml(args.block_file)
+    block = resolve_block_arg(args.block_file, args.block_base64)
     block_id = str(block.get("id", "")).strip()
     block_alias = str(block.get("alias", "")).strip()
     target = (args.target or "").strip() or block_id or block_alias
@@ -1313,7 +1340,7 @@ def cmd_delete_automation(args: argparse.Namespace, txm: TxManager) -> int:
 def cmd_upsert_script(args: argparse.Namespace, txm: TxManager) -> int:
     scripts_before = load_scripts(args.scripts_file)
     scripts = dict(scripts_before)
-    block = parse_block_yaml(args.block_file)
+    block = resolve_block_arg(args.block_file, args.block_base64)
     key = (args.key or "").strip()
     target = (args.target or "").strip() or str(block.get("alias", "")).strip()
     if not key and not target:
@@ -1784,7 +1811,8 @@ def build_parser() -> argparse.ArgumentParser:
     s_lr.add_argument("--backup-dir", type=Path, required=True)
 
     s_upa = sub.add_parser("upsert-automation", help="Replace/add automation by alias/id")
-    s_upa.add_argument("--block-file", type=Path, required=True)
+    s_upa.add_argument("--block-file", type=Path)
+    s_upa.add_argument("--block-base64", default="", help="Base64-encoded YAML block")
     s_upa.add_argument("--target", help="Match target (alias or id)")
     s_upa.add_argument("--match-by", choices=["id", "alias", "id-or-alias"], default="id-or-alias")
     s_upa.add_argument("--allow-id-change", action="store_true")
@@ -1800,7 +1828,8 @@ def build_parser() -> argparse.ArgumentParser:
     s_ups.add_argument("--key", help="Script key (required only when adding new)")
     s_ups.add_argument("--target", help="Match target (alias or key)")
     s_ups.add_argument("--match-by", choices=["key", "alias", "key-or-alias"], default="key-or-alias")
-    s_ups.add_argument("--block-file", type=Path, required=True)
+    s_ups.add_argument("--block-file", type=Path)
+    s_ups.add_argument("--block-base64", default="", help="Base64-encoded YAML block")
     s_ups.add_argument("--backup-dir", type=Path, required=True)
 
     s_ds = sub.add_parser("delete-script", help="Delete one script by alias/key")

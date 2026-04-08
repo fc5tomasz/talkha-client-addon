@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.3
+- New: `TalkHaLokal upsert-script` and `upsert-automation` accept `--block-base64`, so operator can send YAML payload directly without SSH and without creating helper files on the client host.
+
 ## 0.2.2
 - Bugfix: add-on now connects to local Home Assistant Core through `http://homeassistant:8123` instead of `supervisor/core`, so the HA user token works correctly inside the container.
 
