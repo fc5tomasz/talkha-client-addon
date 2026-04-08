@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
 import subprocess
+from urllib import parse, request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -19,12 +21,33 @@ DEFAULT_SCRIPTS_FILE = Path("/homeassistant/scripts.yaml")
 DEFAULT_STORAGE_DIR = Path("/homeassistant/.storage")
 DEFAULT_STATE_DIR = Path("/data/.talkhalokal_state")
 DEFAULT_TALKHA_RUNTIME = Path("/opt/talkha/runtime/TalkHa.py")
+DEFAULT_TALKHA_CONFIG = Path("/data/.talkha.env")
 ENTITY_ID_RE = re.compile(r"\b[a-z_]+\.[a-zA-Z0-9_]+\b")
 LOCAL_TZ = dt.datetime.now().astimezone().tzinfo or dt.timezone.utc
 
 
 def _read_yaml(path: Path) -> Any:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _read_key_value_file(path: Path) -> Dict[str, str]:
+    if not path.exists():
+        return {}
+    out: Dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip().strip("\"").strip("'")
+    return out
+
+
+def _resolve_ha_creds(config_file: Path = DEFAULT_TALKHA_CONFIG) -> Dict[str, str]:
+    cfg = _read_key_value_file(config_file)
+    ha_url = os.environ.get("HA_URL", "").strip() or cfg.get("HA_URL", "").strip()
+    ha_token = os.environ.get("HA_TOKEN", "").strip() or cfg.get("HA_TOKEN", "").strip()
+    return {"ha_url": ha_url.rstrip("/"), "ha_token": ha_token}
 
 
 def _parse_time(value: str) -> Optional[dt.datetime]:
@@ -152,6 +175,66 @@ def _find_automation_runtime_state(runtime_states: Dict[str, Dict[str, Any]], au
         if str(attrs.get("id", "")) == automation_id:
             return row
     return None
+
+
+def _fmt_ha_time(value: dt.datetime) -> str:
+    local_value = value.astimezone(LOCAL_TZ) if value.tzinfo else value.replace(tzinfo=LOCAL_TZ)
+    return local_value.isoformat()
+
+
+def _fetch_logbook_count(
+    entity_id: str,
+    from_dt: Optional[dt.datetime],
+    to_dt: Optional[dt.datetime],
+    config_file: Path = DEFAULT_TALKHA_CONFIG,
+) -> Dict[str, Any]:
+    if not entity_id or from_dt is None:
+        return {"ok": False, "count": None, "reason": "missing entity_id or from_time"}
+    creds = _resolve_ha_creds(config_file)
+    if not creds["ha_url"] or not creds["ha_token"]:
+        return {"ok": False, "count": None, "reason": "missing HA credentials"}
+
+    start = _fmt_ha_time(from_dt)
+    url = f"{creds['ha_url']}/api/logbook/{parse.quote(start, safe='')}"
+    params = {"entity": entity_id}
+    if to_dt is not None:
+        params["end_time"] = _fmt_ha_time(to_dt)
+    url = f"{url}?{parse.urlencode(params)}"
+    req = request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {creds['ha_token']}",
+            "Content-Type": "application/json",
+        },
+        method="GET",
+    )
+    try:
+        with request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        return {"ok": False, "count": None, "reason": f"logbook request failed: {exc}"}
+
+    if not isinstance(payload, list):
+        return {"ok": False, "count": None, "reason": "unexpected logbook payload"}
+
+    count = 0
+    samples: List[Dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("entity_id", "")) != entity_id:
+            continue
+        when = item.get("when") or item.get("time_fired") or item.get("last_changed")
+        count += 1
+        if len(samples) < 10:
+            samples.append(
+                {
+                    "when": when,
+                    "name": item.get("name"),
+                    "message": item.get("message"),
+                }
+            )
+    return {"ok": True, "count": count, "samples": samples}
 
 
 def _load_traces(storage_dir: Path) -> Dict[str, Any]:
@@ -408,6 +491,22 @@ def run_investigation(
     states = _collect_states(matches, runtime_states, state_limit)
     traces = _collect_traces(matches, storage_dir, from_dt, to_dt, trace_limit)
     tx_rows = _collect_tx(query, state_dir, from_dt, to_dt, tx_limit)
+    uruchomienia: List[Dict[str, Any]] = []
+    for row in matches["automations"][:10]:
+        automation_id = row.get("id", "")
+        runtime_row = _find_automation_runtime_state(runtime_states, automation_id)
+        entity_id = str((runtime_row or {}).get("entity_id", ""))
+        if not entity_id:
+            continue
+        count_payload = _fetch_logbook_count(entity_id, from_dt, to_dt)
+        uruchomienia.append(
+            {
+                "alias": row.get("alias"),
+                "id": automation_id,
+                "entity_id": entity_id,
+                **count_payload,
+            }
+        )
     facts = _build_facts(matches, states, traces)
     timeline = _build_timeline(states, traces)
     missing_evidence = _build_missing_evidence(matches, traces, from_time, to_time)
@@ -422,6 +521,7 @@ def run_investigation(
         },
         "stany": states,
         "trace": traces,
+        "uruchomienia": uruchomienia,
         "transakcje": tx_rows,
         "fakty": facts,
         "os_czasu": timeline,

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.7
+- New: `diagnoza-automatyzacji` now returns `uruchomienia` with logbook-based run counts in the selected time window.
+- Bugfix: `diagnoza-automatyzacji` now exposes the correct state, timeline and missing-evidence fields.
+
 ## 0.2.6
 - New: `diagnoza-automatyzacji` for practical per-client automation diagnosis by alias or id.
 

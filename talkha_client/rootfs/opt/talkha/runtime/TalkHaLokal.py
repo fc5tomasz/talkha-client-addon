@@ -1838,12 +1838,13 @@ def cmd_diagnoza_automatyzacji(args: argparse.Namespace) -> int:
         "target": args.target,
         "match_by": args.match_by,
         "automatyzacje": matches,
-        "stany": result.get("stany_runtime", []),
+        "stany": result.get("stany", []),
         "trace": result.get("trace", []),
+        "uruchomienia": result.get("uruchomienia", []),
         "transakcje": result.get("transakcje", []),
         "fakty": result.get("fakty", []),
-        "timeline": result.get("timeline", []),
-        "braki_dowodowe": result.get("braki_dowodowe", []),
+        "timeline": result.get("os_czasu", []),
+        "braki_dowodowe": result.get("brakujace_dowody", []),
         "wniosek": result.get("wniosek", ""),
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
