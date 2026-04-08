@@ -2,7 +2,7 @@
 
 Repozytorium add-onu Home Assistant dla zdalnej pracy serwisowej `TalkHa`.
 
-Autor: Tomasz Furdal, HA Expert
+Autor: Tomasz Furdal, ha-expert.com
 
 Klient:
 1. dodaje to repo do Add-on Store,

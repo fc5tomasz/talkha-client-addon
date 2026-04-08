@@ -2,7 +2,7 @@
 
 Zdalne narzedzie serwisowe dla Home Assistant.
 
-Autor: Tomasz Furdal, HA Expert
+Autor: Tomasz Furdal, ha-expert.com
 
 ## Instalacja u klienta
 
