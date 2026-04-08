@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.15
+- Improved: `lights-on-report` now reports active visual entities, including `light.*` and light-like `switch.*` entities such as panel/backlight states.
+
 ## 0.2.14
 - New: `lights-on-report` returns all active `light.*` entities with friendly names and timestamps.
 - New: `why-light-on --entity-id ...` provides a compact explanation for why a specific light is currently on.

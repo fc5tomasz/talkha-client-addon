@@ -635,19 +635,49 @@ def _get_real_zigbee_addons() -> List[Dict[str, Any]]:
 def build_lights_on_report(states: Any) -> Dict[str, Any]:
     if not isinstance(states, list):
         raise TalkHaError("Unexpected get_states response")
-    lights: List[Dict[str, Any]] = []
+
+    def _is_visual_switch(entity_id: str, attrs: Dict[str, Any]) -> bool:
+        if not entity_id.startswith("switch."):
+            return False
+        friendly_name = str(attrs.get("friendly_name", "") or "")
+        blob = f"{entity_id} {friendly_name}".lower()
+        include_keywords = (
+            "panel",
+            "backlight",
+            "podswiet",
+            "podświet",
+            "light",
+            "lamp",
+            "led",
+            "oswietl",
+            "oświetl",
+        )
+        exclude_keywords = (
+            "power",
+            "permit_join",
+            "socket",
+            "blokada",
+            "child_lock",
+            "indicator light mode",
+        )
+        return any(keyword in blob for keyword in include_keywords) and not any(
+            keyword in blob for keyword in exclude_keywords
+        )
+
+    active_items: List[Dict[str, Any]] = []
     for row in states:
         if not isinstance(row, dict):
             continue
         entity_id = str(row.get("entity_id", ""))
-        if not entity_id.startswith("light."):
-            continue
         if str(row.get("state", "")) != "on":
             continue
         attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
-        lights.append(
+        if not entity_id.startswith("light.") and not _is_visual_switch(entity_id, attrs):
+            continue
+        active_items.append(
             {
                 "entity_id": entity_id,
+                "domain": entity_id.split(".", 1)[0] if "." in entity_id else "",
                 "friendly_name": str(attrs.get("friendly_name", "") or entity_id),
                 "last_changed": str(row.get("last_changed", "")),
                 "brightness": attrs.get("brightness"),
@@ -656,13 +686,19 @@ def build_lights_on_report(states: Any) -> Dict[str, Any]:
                 "context": row.get("context", {}),
             }
         )
-    lights.sort(key=lambda item: (item.get("friendly_name", ""), item.get("entity_id", "")))
+    active_items.sort(key=lambda item: (item.get("friendly_name", ""), item.get("entity_id", "")))
+    lights = [item for item in active_items if item.get("domain") == "light"]
+    switches = [item for item in active_items if item.get("domain") == "switch"]
     return {
         "ok": True,
         "podsumowanie": {
+            "aktywnie_swiecace": len(active_items),
             "swiatla_wlaczone": len(lights),
+            "wizualne_przelaczniki_wlaczone": len(switches),
         },
-        "swiatla": lights,
+        "swiatla": active_items,
+        "swiatla_light": lights,
+        "swiatla_switch": switches,
     }
 
 
@@ -2358,7 +2394,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ge = sub.add_parser("get-entity", help="Return single entity state by entity_id")
     p_ge.add_argument("--entity-id", required=True)
 
-    sub.add_parser("lights-on-report", help="Return all currently active light.* entities")
+    sub.add_parser("lights-on-report", help="Return all currently active visual entities: light.* and light-like switch.*")
 
     sub.add_parser("zigbee-status-report", help="Summarize Zigbee bridge online/offline status from runtime states")
 
