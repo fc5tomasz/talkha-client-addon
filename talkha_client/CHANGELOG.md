@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.13
+- Bugfix: add-on now requests `hassio_role: manager`, so `zigbee-status-report` can read real Zigbee2MQTT add-ons from Supervisor and report exact bridge names without helper filtering.
+
 ## 0.2.12
 - Improved: `zigbee-status-report` now maps real Zigbee2MQTT add-ons from Supervisor, returns exact add-on names and separates orphan Zigbee bridge entities from real active bridges.
 
