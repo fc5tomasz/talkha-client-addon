@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.9
+- New: `get-entity --entity-id ...` returns a single entity state directly, without reading and filtering the full states dump.
+
 ## 0.2.8
 - New: `diagnoza-automatyzacji` now returns `analiza_slotow` for supported scheduled automations, including blocked slots and likely blocking conditions.
 

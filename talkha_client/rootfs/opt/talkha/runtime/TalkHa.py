@@ -1612,6 +1612,17 @@ async def run_async(args: argparse.Namespace) -> int:
                     )
             return 0
 
+        if args.cmd == "get-entity":
+            ctx = await ensure_ws()
+            states = await ws_success(ctx, {"type": "get_states"})
+            if not isinstance(states, list):
+                raise TalkHaError("Unexpected get_states response")
+            target = next((row for row in states if isinstance(row, dict) and str(row.get("entity_id", "")) == args.entity_id), None)
+            if target is None:
+                raise TalkHaError(f"Entity not found: {args.entity_id}")
+            print(json.dumps(target, ensure_ascii=False, indent=2))
+            return 0
+
         if args.cmd == "helper-upsert":
             require_explicit(args.explicit_confirm, "helper-upsert")
             item = parse_json_arg(args.item_json, "--item-json")
@@ -2063,6 +2074,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_hl = sub.add_parser("helper-list", help="List GUI helpers from runtime/entity registry")
     p_hl.add_argument("--kind", required=True, choices=sorted(HELPER_STORAGE_FILES.keys()))
     p_hl.add_argument("--as-json", action="store_true")
+
+    p_ge = sub.add_parser("get-entity", help="Return single entity state by entity_id")
+    p_ge.add_argument("--entity-id", required=True)
 
     p_hu = sub.add_parser("helper-upsert", help="Create/update GUI helper over WebSocket/API")
     p_hu.add_argument("--kind", required=True, choices=sorted(HELPER_STORAGE_FILES.keys()))
