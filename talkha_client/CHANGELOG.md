@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5
+- New rule: when adding a new script, `alias` is required.
+- New rule: when adding a new automation, `alias` is required.
+- Automation-oriented read and upsert flows now default to alias-first matching.
+
 ## 0.2.4
 - New: `get-script` returns the full YAML block of a script by key or alias.
 - New: `get-automation` returns the full YAML block of an automation by id or alias.

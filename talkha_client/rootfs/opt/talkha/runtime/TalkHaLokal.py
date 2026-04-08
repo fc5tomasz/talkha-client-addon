@@ -681,8 +681,8 @@ def cmd_find(args: argparse.Namespace) -> int:
         if q in txt:
             out["automations"].append(
                 {
-                    "id": str(a.get("id", "")),
                     "alias": str(a.get("alias", "")),
+                    "id": str(a.get("id", "")),
                     "enabled": automation_enabled(a),
                     "entities": extract_entity_ids(a)[:30],
                 }
@@ -1161,6 +1161,9 @@ def cmd_upsert_automation(args: argparse.Namespace, txm: TxManager) -> int:
                 if not str(block.get("id", "")).strip():
                     txm.finish(tx, "error", "New automation requires non-empty id")
                     raise TalkHaLokalError("New automation block requires non-empty id")
+                if not block_alias:
+                    txm.finish(tx, "error", "New automation requires non-empty alias")
+                    raise TalkHaLokalError("New automation block requires non-empty alias")
                 if not args.allow_add:
                     txm.finish(tx, "error", "Automation target not found and --allow-add not set")
                     raise TalkHaLokalError("Automation target not found. Use --allow-add to append.")
@@ -1341,6 +1344,7 @@ def cmd_upsert_script(args: argparse.Namespace, txm: TxManager) -> int:
     scripts_before = load_scripts(args.scripts_file)
     scripts = dict(scripts_before)
     block = resolve_block_arg(args.block_file, args.block_base64)
+    block_alias = str(block.get("alias", "")).strip()
     key = (args.key or "").strip()
     target = (args.target or "").strip() or str(block.get("alias", "")).strip()
     if not key and not target:
@@ -1376,6 +1380,9 @@ def cmd_upsert_script(args: argparse.Namespace, txm: TxManager) -> int:
                     raise TalkHaLokalError("Script target not found. Use --key to add a new script.")
 
             existed = target_key in scripts
+            if not existed and not block_alias:
+                txm.finish(tx, "error", "New script requires non-empty alias")
+                raise TalkHaLokalError("New script block requires non-empty alias")
             scripts[target_key] = block
             if existed:
                 replace_script_block_text(args.scripts_file, target_key, block)
@@ -1679,8 +1686,8 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
             continue
         selected_autos.append(
             {
-                "id": str(a.get("id", "")),
                 "alias": str(a.get("alias", "")),
+                "id": str(a.get("id", "")),
                 "enabled": automation_enabled(a),
                 "entities": extract_entity_ids(a)[:20],
                 "trigger_keys": sorted(list((a.get("trigger") or a.get("triggers") or [{}])[0].keys())) if (a.get("trigger") or a.get("triggers")) else [],
@@ -1764,8 +1771,8 @@ def cmd_get_automation(args: argparse.Namespace) -> int:
     index = matches[0]
     block = autos[index]
     payload = {
-        "id": str(block.get("id", "")),
         "alias": str(block.get("alias", "")),
+        "id": str(block.get("id", "")),
         "enabled": automation_enabled(block),
         "yaml": render_automation_block(block),
     }
@@ -1839,7 +1846,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s_ga = sub.add_parser("get-automation", help="Get full automation block by id or alias")
     s_ga.add_argument("--target", required=True)
-    s_ga.add_argument("--match-by", choices=["id", "alias", "id-or-alias"], default="id-or-alias")
+    s_ga.add_argument("--match-by", choices=["id", "alias", "id-or-alias"], default="alias")
 
     s_inv = sub.add_parser("investigate", help="Compact read-only investigation for automations/scripts/entities")
     s_inv.add_argument("--query", required=True)
@@ -1870,7 +1877,7 @@ def build_parser() -> argparse.ArgumentParser:
     s_upa.add_argument("--block-file", type=Path)
     s_upa.add_argument("--block-base64", default="", help="Base64-encoded YAML block")
     s_upa.add_argument("--target", help="Match target (alias or id)")
-    s_upa.add_argument("--match-by", choices=["id", "alias", "id-or-alias"], default="id-or-alias")
+    s_upa.add_argument("--match-by", choices=["id", "alias", "id-or-alias"], default="alias")
     s_upa.add_argument("--allow-id-change", action="store_true")
     s_upa.add_argument("--allow-add", action="store_true")
     s_upa.add_argument("--backup-dir", type=Path, required=True)
