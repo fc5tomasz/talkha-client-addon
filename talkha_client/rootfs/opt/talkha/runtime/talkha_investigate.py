@@ -50,6 +50,23 @@ def _resolve_ha_creds(config_file: Path = DEFAULT_TALKHA_CONFIG) -> Dict[str, st
     return {"ha_url": ha_url.rstrip("/"), "ha_token": ha_token}
 
 
+def _ha_get_json(path: str, config_file: Path = DEFAULT_TALKHA_CONFIG) -> Any:
+    creds = _resolve_ha_creds(config_file)
+    if not creds["ha_url"] or not creds["ha_token"]:
+        raise RuntimeError("missing HA credentials")
+    url = f"{creds['ha_url']}{path}"
+    req = request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {creds['ha_token']}",
+            "Content-Type": "application/json",
+        },
+        method="GET",
+    )
+    with request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def _parse_time(value: str) -> Optional[dt.datetime]:
     raw = (value or "").strip()
     if not raw:
@@ -235,6 +252,305 @@ def _fetch_logbook_count(
                 }
             )
     return {"ok": True, "count": count, "samples": samples}
+
+
+def _fetch_logbook_events(
+    entity_id: str,
+    from_dt: Optional[dt.datetime],
+    to_dt: Optional[dt.datetime],
+    config_file: Path = DEFAULT_TALKHA_CONFIG,
+) -> List[Dict[str, Any]]:
+    if not entity_id or from_dt is None:
+        return []
+    creds = _resolve_ha_creds(config_file)
+    if not creds["ha_url"] or not creds["ha_token"]:
+        return []
+    start = _fmt_ha_time(from_dt)
+    url = f"{creds['ha_url']}/api/logbook/{parse.quote(start, safe='')}"
+    params = {"entity": entity_id}
+    if to_dt is not None:
+        params["end_time"] = _fmt_ha_time(to_dt)
+    payload = _ha_get_json(f"/api/logbook/{parse.quote(start, safe='')}?{parse.urlencode(params)}", config_file=config_file)
+    events: List[Dict[str, Any]] = []
+    if not isinstance(payload, list):
+        return events
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("entity_id", "")) != entity_id:
+            continue
+        when_raw = item.get("when") or item.get("time_fired") or item.get("last_changed")
+        when = _parse_time(str(when_raw)) if when_raw else None
+        events.append(
+            {
+                "when": when,
+                "when_raw": when_raw,
+                "name": item.get("name"),
+                "message": item.get("message"),
+            }
+        )
+    events.sort(key=lambda row: row.get("when") or dt.datetime.min.replace(tzinfo=dt.timezone.utc))
+    return events
+
+
+def _fetch_history_series(
+    entity_ids: List[str],
+    from_dt: Optional[dt.datetime],
+    to_dt: Optional[dt.datetime],
+    config_file: Path = DEFAULT_TALKHA_CONFIG,
+) -> Dict[str, List[Dict[str, Any]]]:
+    if not entity_ids or from_dt is None:
+        return {}
+    params = {
+        "filter_entity_id": ",".join(entity_ids),
+        "minimal_response": "1",
+        "no_attributes": "0",
+    }
+    if to_dt is not None:
+        params["end_time"] = _fmt_ha_time(to_dt)
+    start = parse.quote(_fmt_ha_time(from_dt), safe="")
+    payload = _ha_get_json(f"/api/history/period/{start}?{parse.urlencode(params)}", config_file=config_file)
+    out: Dict[str, List[Dict[str, Any]]] = {entity_id: [] for entity_id in entity_ids}
+    if not isinstance(payload, list):
+        return out
+    for series in payload:
+        if not isinstance(series, list) or not series:
+            continue
+        first = series[0] if isinstance(series[0], dict) else {}
+        entity_id = str(first.get("entity_id", ""))
+        if not entity_id:
+            continue
+        rows: List[Dict[str, Any]] = []
+        for item in series:
+            if not isinstance(item, dict):
+                continue
+            when_raw = item.get("last_changed") or item.get("last_updated")
+            when = _parse_time(str(when_raw)) if when_raw else None
+            rows.append({"when": when, "state": item.get("state"), "attributes": item.get("attributes") or {}})
+        rows.sort(key=lambda row: row.get("when") or dt.datetime.min.replace(tzinfo=dt.timezone.utc))
+        out[entity_id] = rows
+    return out
+
+
+def _get_state_at(series: List[Dict[str, Any]], when: dt.datetime) -> Optional[Dict[str, Any]]:
+    current: Optional[Dict[str, Any]] = None
+    for row in series:
+        row_when = row.get("when")
+        if row_when is None or row_when <= when:
+            current = row
+            continue
+        break
+    return current
+
+
+def _parse_duration_text(value: str) -> Optional[dt.timedelta]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    parts = raw.split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        hours, minutes, seconds = [int(part) for part in parts]
+    except ValueError:
+        return None
+    return dt.timedelta(hours=hours, minutes=minutes, seconds=seconds)
+
+
+def _parse_minutes_modulo_template(value: str) -> Optional[int]:
+    raw = str(value or "")
+    match = re.search(r"%\s*(\d+)\)\s*==\s*0", raw)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _parse_hhmmss(value: str) -> Optional[int]:
+    raw = str(value or "").strip().strip("'").strip('"')
+    if not raw:
+        return None
+    parts = raw.split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+    except ValueError:
+        return None
+    return hours * 60 + minutes
+
+
+def _load_full_automation(target_id: str, automations_file: Path) -> Optional[Dict[str, Any]]:
+    rows = _read_yaml(automations_file) or []
+    for item in rows:
+        if str(item.get("id", "")) == target_id:
+            return item
+    return None
+
+
+def _extract_condition_entities(automation: Dict[str, Any]) -> List[str]:
+    entities: List[str] = []
+    conditions = automation.get("condition") or automation.get("conditions") or []
+    if isinstance(conditions, dict):
+        conditions = [conditions]
+    for item in conditions:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entity_id", "")).strip()
+        if entity_id:
+            entities.append(entity_id)
+    return sorted(set(entities))
+
+
+def _match_triggered_slot(slot: dt.datetime, events: List[Dict[str, Any]], tolerance_seconds: int = 90) -> Optional[Dict[str, Any]]:
+    for event in events:
+        when = event.get("when")
+        if when is None:
+            continue
+        if abs((when - slot).total_seconds()) <= tolerance_seconds:
+            return event
+    return None
+
+
+def _evaluate_condition_at(
+    condition: Dict[str, Any],
+    slot: dt.datetime,
+    history: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    ctype = str(condition.get("condition") or "").strip()
+    if ctype == "time":
+        after_minutes = _parse_hhmmss(str(condition.get("after", "")))
+        before_minutes = _parse_hhmmss(str(condition.get("before", "")))
+        current_minutes = slot.astimezone(LOCAL_TZ).hour * 60 + slot.astimezone(LOCAL_TZ).minute
+        passed = True
+        if after_minutes is not None:
+            passed = passed and current_minutes >= after_minutes
+        if before_minutes is not None:
+            passed = passed and current_minutes < before_minutes
+        return {"ok": passed, "reason": "" if passed else "time window"}
+
+    if ctype == "template":
+        modulo = _parse_minutes_modulo_template(str(condition.get("value_template", "")))
+        if modulo:
+            local_slot = slot.astimezone(LOCAL_TZ)
+            passed = ((local_slot.hour * 60 + local_slot.minute) % modulo) == 0
+            return {"ok": passed, "reason": "" if passed else f"template modulo {modulo}"}
+        return {"ok": True, "reason": ""}
+
+    entity_id = str(condition.get("entity_id", "")).strip()
+    series = history.get(entity_id, [])
+    row = _get_state_at(series, slot)
+
+    if ctype == "state":
+        desired = str(condition.get("state", ""))
+        if row is None:
+            return {"ok": False, "reason": f"no history for {entity_id}"}
+        passed = str(row.get("state")) == desired
+        duration = _parse_duration_text(str(condition.get("for", "")))
+        if passed and duration is not None:
+            past_row = _get_state_at(series, slot - duration)
+            passed = past_row is not None and str(past_row.get("state")) == desired
+            if not passed:
+                return {"ok": False, "reason": f"{entity_id} not {desired} for {condition.get('for')}"}
+        return {"ok": passed, "reason": "" if passed else f"{entity_id} state"}
+
+    if ctype == "numeric_state":
+        if row is None:
+            return {"ok": False, "reason": f"no history for {entity_id}"}
+        try:
+            value = float(str(row.get("state")))
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": f"{entity_id} non-numeric"}
+        below = condition.get("below")
+        above = condition.get("above")
+        passed = True
+        if below is not None:
+            passed = passed and value < float(below)
+        if above is not None:
+            passed = passed and value > float(above)
+        if passed:
+            return {"ok": True, "reason": ""}
+        if below is not None and value >= float(below):
+            return {"ok": False, "reason": f"{entity_id}={value} >= {below}"}
+        if above is not None and value <= float(above):
+            return {"ok": False, "reason": f"{entity_id}={value} <= {above}"}
+        return {"ok": False, "reason": f"{entity_id} numeric_state"}
+
+    return {"ok": True, "reason": ""}
+
+
+def _analyze_automation_slots(
+    automation: Optional[Dict[str, Any]],
+    entity_id: str,
+    from_dt: Optional[dt.datetime],
+    to_dt: Optional[dt.datetime],
+) -> List[Dict[str, Any]]:
+    if automation is None or from_dt is None or to_dt is None or not entity_id:
+        return []
+    triggers = automation.get("trigger") or automation.get("triggers") or []
+    if isinstance(triggers, dict):
+        triggers = [triggers]
+    interval_minutes: Optional[int] = None
+    for item in triggers:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("trigger", "")) != "time_pattern":
+            continue
+        minutes_spec = str(item.get("minutes", "")).strip()
+        if minutes_spec.startswith("/"):
+            try:
+                interval_minutes = int(minutes_spec[1:])
+            except ValueError:
+                interval_minutes = None
+            break
+    if not interval_minutes:
+        return []
+
+    conditions = automation.get("condition") or automation.get("conditions") or []
+    if isinstance(conditions, dict):
+        conditions = [conditions]
+    history_entities = _extract_condition_entities(automation)
+    history = _fetch_history_series(history_entities, from_dt - dt.timedelta(hours=1), to_dt)
+    events = _fetch_logbook_events(entity_id, from_dt, to_dt)
+
+    slots: List[Dict[str, Any]] = []
+    cursor = from_dt.replace(second=0, microsecond=0)
+    while cursor <= to_dt:
+        local_cursor = cursor.astimezone(LOCAL_TZ)
+        minute = local_cursor.minute
+        if minute % interval_minutes == 0:
+            reasons: List[str] = []
+            passed_all = True
+            for condition in conditions:
+                if not isinstance(condition, dict):
+                    continue
+                verdict = _evaluate_condition_at(condition, cursor, history)
+                if not verdict.get("ok", False):
+                    passed_all = False
+                    reasons.append(str(verdict.get("reason", "condition failed")))
+            if passed_all:
+                matched_event = _match_triggered_slot(cursor, events)
+                slots.append(
+                    {
+                        "slot": cursor.isoformat(),
+                        "trigger_candidate": True,
+                        "conditions_ok": True,
+                        "triggered": matched_event is not None,
+                        "message": (matched_event or {}).get("message", ""),
+                    }
+                )
+            elif reasons:
+                slots.append(
+                    {
+                        "slot": cursor.isoformat(),
+                        "trigger_candidate": True,
+                        "conditions_ok": False,
+                        "triggered": False,
+                        "blocked_by": reasons,
+                    }
+                )
+        cursor += dt.timedelta(minutes=1)
+    return slots
 
 
 def _load_traces(storage_dir: Path) -> Dict[str, Any]:
@@ -492,6 +808,7 @@ def run_investigation(
     traces = _collect_traces(matches, storage_dir, from_dt, to_dt, trace_limit)
     tx_rows = _collect_tx(query, state_dir, from_dt, to_dt, tx_limit)
     uruchomienia: List[Dict[str, Any]] = []
+    analiza_slotow: List[Dict[str, Any]] = []
     for row in matches["automations"][:10]:
         automation_id = row.get("id", "")
         runtime_row = _find_automation_runtime_state(runtime_states, automation_id)
@@ -507,6 +824,17 @@ def run_investigation(
                 **count_payload,
             }
         )
+        full_automation = _load_full_automation(automation_id, automations_file)
+        slot_rows = _analyze_automation_slots(full_automation, entity_id, from_dt, to_dt)
+        if slot_rows:
+            analiza_slotow.append(
+                {
+                    "alias": row.get("alias"),
+                    "id": automation_id,
+                    "entity_id": entity_id,
+                    "slots": slot_rows[:80],
+                }
+            )
     facts = _build_facts(matches, states, traces)
     timeline = _build_timeline(states, traces)
     missing_evidence = _build_missing_evidence(matches, traces, from_time, to_time)
@@ -522,6 +850,7 @@ def run_investigation(
         "stany": states,
         "trace": traces,
         "uruchomienia": uruchomienia,
+        "analiza_slotow": analiza_slotow,
         "transakcje": tx_rows,
         "fakty": facts,
         "os_czasu": timeline,
