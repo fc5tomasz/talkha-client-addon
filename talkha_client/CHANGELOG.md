@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.21
+- Bugfix: `lights-on-report` now includes real panel key switches again when registry metadata shows a physical light-switch channel such as `L1/L2/Left/Right/Center`, while still excluding helper/backlight/power junk.
+
 ## 0.2.20
 - Bugfix: `lights-on-report` now reads entity and device registries and excludes logical Zigbee2MQTT `Group` lights, so grouped aliases do not duplicate real physical lights in the report.
 

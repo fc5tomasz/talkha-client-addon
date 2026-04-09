@@ -658,6 +658,18 @@ def build_lights_on_report(
     def _is_visual_switch(entity_id: str, attrs: Dict[str, Any]) -> bool:
         if not entity_id.startswith("switch."):
             return False
+        reg = entity_by_id.get(entity_id, {})
+        device_id = str(reg.get("device_id", "") or "")
+        original_name = str(reg.get("original_name", "") or "").strip().casefold()
+        device = device_by_id.get(device_id, {}) if device_id else {}
+        manufacturer = str(device.get("manufacturer", "") or "").strip().casefold()
+        model = str(device.get("model", "") or "").strip().casefold()
+        if (
+            manufacturer == "tuya"
+            and "light switch" in model
+            and original_name in {"l1", "l2", "l3", "l4", "left", "right", "center"}
+        ):
+            return True
         friendly_name = str(attrs.get("friendly_name", "") or "")
         blob = f"{entity_id} {friendly_name}".lower()
         include_keywords = (
