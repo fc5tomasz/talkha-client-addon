@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.22
+- Cleanup: `lights-on-report` no longer returns the mixed `aktywnie_swiecace` counter; summary now keeps only `swiatla_wlaczone` and `wizualne_przelaczniki_wlaczone`.
+
 ## 0.2.21
 - Bugfix: `lights-on-report` now includes real panel key switches again when registry metadata shows a physical light-switch channel such as `L1/L2/Left/Right/Center`, while still excluding helper/backlight/power junk.
 

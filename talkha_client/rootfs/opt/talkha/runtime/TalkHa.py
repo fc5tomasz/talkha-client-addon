@@ -748,7 +748,6 @@ def build_lights_on_report(
     return {
         "ok": True,
         "podsumowanie": {
-            "aktywnie_swiecace": len(active_items),
             "swiatla_wlaczone": len(lights),
             "wizualne_przelaczniki_wlaczone": len(switches),
         },
