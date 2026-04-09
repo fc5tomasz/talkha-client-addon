@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.20
+- Bugfix: `lights-on-report` now reads entity and device registries and excludes logical Zigbee2MQTT `Group` lights, so grouped aliases do not duplicate real physical lights in the report.
+
 ## 0.2.19
 - Bugfix: `lights-on-report` now ignores `panel_*`, rolety and helper switches; only real lamp/light/LED style switches should remain.
 

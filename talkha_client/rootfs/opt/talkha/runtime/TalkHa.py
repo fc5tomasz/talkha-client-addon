@@ -632,9 +632,28 @@ def _get_real_zigbee_addons() -> List[Dict[str, Any]]:
     return addons
 
 
-def build_lights_on_report(states: Any) -> Dict[str, Any]:
+def build_lights_on_report(
+    states: Any,
+    entity_registry: Optional[List[Dict[str, Any]]] = None,
+    device_registry: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     if not isinstance(states, list):
         raise TalkHaError("Unexpected get_states response")
+
+    entity_by_id: Dict[str, Dict[str, Any]] = {}
+    device_by_id: Dict[str, Dict[str, Any]] = {}
+    if isinstance(entity_registry, list):
+        entity_by_id = {
+            str(row.get("entity_id", "")): row
+            for row in entity_registry
+            if isinstance(row, dict) and str(row.get("entity_id", ""))
+        }
+    if isinstance(device_registry, list):
+        device_by_id = {
+            str(row.get("id", "")): row
+            for row in device_registry
+            if isinstance(row, dict) and str(row.get("id", ""))
+        }
 
     def _is_visual_switch(entity_id: str, attrs: Dict[str, Any]) -> bool:
         if not entity_id.startswith("switch."):
@@ -675,6 +694,18 @@ def build_lights_on_report(states: Any) -> Dict[str, Any]:
             keyword in blob for keyword in exclude_keywords
         )
 
+    def _is_logical_group_light(entity_id: str) -> bool:
+        if not entity_id.startswith("light."):
+            return False
+        reg = entity_by_id.get(entity_id, {})
+        device_id = str(reg.get("device_id", "") or "")
+        if not device_id:
+            return False
+        device = device_by_id.get(device_id, {})
+        manufacturer = str(device.get("manufacturer", "") or "").strip().casefold()
+        model = str(device.get("model", "") or "").strip().casefold()
+        return manufacturer == "zigbee2mqtt" and model == "group"
+
     active_items: List[Dict[str, Any]] = []
     for row in states:
         if not isinstance(row, dict):
@@ -683,6 +714,8 @@ def build_lights_on_report(states: Any) -> Dict[str, Any]:
         if str(row.get("state", "")) != "on":
             continue
         attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+        if entity_id.startswith("light.") and _is_logical_group_light(entity_id):
+            continue
         if not entity_id.startswith("light.") and not _is_visual_switch(entity_id, attrs):
             continue
         active_items.append(
@@ -1938,7 +1971,11 @@ async def run_async(args: argparse.Namespace) -> int:
         if args.cmd == "lights-on-report":
             ctx = await ensure_ws()
             states = await ws_success(ctx, {"type": "get_states"})
-            report = build_lights_on_report(states)
+            entity_registry = await ws_entity_registry_list(ctx)
+            device_registry = await ws_success(ctx, {"type": "config/device_registry/list"})
+            if not isinstance(device_registry, list):
+                raise TalkHaError("Unexpected device registry response")
+            report = build_lights_on_report(states, entity_registry, device_registry)
             print(json.dumps(report, ensure_ascii=False, indent=2))
             return 0
 
