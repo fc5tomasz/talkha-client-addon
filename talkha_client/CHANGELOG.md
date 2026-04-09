@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.19
+- Bugfix: `lights-on-report` now ignores `panel_*`, rolety and helper switches; only real lamp/light/LED style switches should remain.
+
 ## 0.2.18
 - Bugfix: `lights-on-report` now excludes `Multi przelacznik` / `zasilanie` switches, so powered circuits are not mistaken for lit entities.
 
