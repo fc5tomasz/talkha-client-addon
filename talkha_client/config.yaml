@@ -1,5 +1,5 @@
 name: Ha-expert-Client
-version: "0.2.22"
+version: "0.2.24"
 slug: talkha_client
 description: Full remote service agent for TalkHa and TalkHaLokal
 url: https://github.com/fc5tomasz/talkha-client-addon
@@ -19,6 +19,8 @@ map:
 options:
   ha_token: ""
   client_id: ""
+  operator_url: ""
 schema:
   ha_token: str
   client_id: str
+  operator_url: str

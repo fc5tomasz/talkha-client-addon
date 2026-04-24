@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.24
+- Bugfix: Dockerfile now uses the dynamic Home Assistant `BUILD_FROM` argument, so the add-on can build on the target architecture instead of being pinned to `amd64`.
+
+## 0.2.23
+- New: add-on now exposes `operator_url` as a normal configuration field, so the operator endpoint can be changed per client without rebuilding the add-on.
+- Bugfix: startup now validates `operator_url` and trims a trailing slash before launching the agent.
+
 ## 0.2.22
 - Cleanup: `lights-on-report` no longer returns the mixed `aktywnie_swiecace` counter; summary now keeps only `swiatla_wlaczone` and `wizualne_przelaczniki_wlaczone`.
 

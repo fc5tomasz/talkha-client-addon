@@ -11,6 +11,7 @@ Autor: Tomasz Furdal, ha-expert.com
 3. Wpisac:
    - `ha_token`
    - `client_id`
+   - `operator_url`
 4. Uruchomic add-on.
 
 ## Dzialanie
@@ -18,3 +19,4 @@ Autor: Tomasz Furdal, ha-expert.com
 - add-on laczy sie z serwerem serwisowym
 - nie wymaga publicznego portu po stronie klienta
 - moze byc uzywany do diagnozy i prac serwisowych
+- `operator_url` wskazuje osiagalny adres operatora, np. tunel, domene albo publiczny endpoint
