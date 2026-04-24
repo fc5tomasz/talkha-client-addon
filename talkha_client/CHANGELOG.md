@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.25
+- Bugfix: Dockerfile now uses the official multi-architecture Home Assistant base image as the default `BUILD_FROM`, so Supervisor can build the add-on even when it does not inject `BUILD_FROM` explicitly.
+
 ## 0.2.24
 - Bugfix: Dockerfile now uses the dynamic Home Assistant `BUILD_FROM` argument, so the add-on can build on the target architecture instead of being pinned to `amd64`.
 

@@ -1,4 +1,4 @@
-ARG BUILD_FROM
+ARG BUILD_FROM=ghcr.io/home-assistant/base-python:3.13-alpine3.22
 FROM ${BUILD_FROM}
 
 RUN apk add --no-cache bash curl mariadb-client openssh-client py3-pip
