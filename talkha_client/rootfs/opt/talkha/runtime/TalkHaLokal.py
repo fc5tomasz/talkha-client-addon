@@ -629,6 +629,469 @@ def summarize_scripts(scripts: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]
     return out
 
 
+NUMERIC_LITERAL_RE = re.compile(r"(?<![A-Za-z0-9_])(-?\d+(?:\.\d+)?)")
+
+
+def ensure_list(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def extract_numeric_literals(value: Any, limit: int = 8) -> List[float]:
+    if value is None:
+        return []
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    out: List[float] = []
+    seen = set()
+    for raw in NUMERIC_LITERAL_RE.findall(text):
+        try:
+            num = float(raw)
+        except ValueError:
+            continue
+        if num in seen:
+            continue
+        seen.add(num)
+        out.append(num)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def coerce_entity_ids(value: Any) -> List[str]:
+    if isinstance(value, str):
+        return [value] if ENTITY_ID_RE.fullmatch(value) else []
+    if isinstance(value, list):
+        out: List[str] = []
+        for item in value:
+            out.extend(coerce_entity_ids(item))
+        return out
+    return []
+
+
+def summarize_template_hint(template_text: str) -> Dict[str, Any]:
+    entities = extract_entity_ids(template_text)
+    return {
+        "entities": entities[:10],
+        "numbers": extract_numeric_literals(template_text),
+        "preview": truncate_preview(template_text),
+    }
+
+
+def summarize_trigger_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    trigger_type = str(item.get("trigger", "")).strip() or "unknown"
+    payload: Dict[str, Any] = {"type": trigger_type}
+
+    if trigger_type == "numeric_state":
+        entity_ids = coerce_entity_ids(item.get("entity_id"))
+        payload["entity_ids"] = entity_ids[:10]
+        if item.get("above") is not None:
+            payload["above"] = item.get("above")
+        if item.get("below") is not None:
+            payload["below"] = item.get("below")
+        if item.get("for") is not None:
+            payload["for"] = item.get("for")
+        return payload
+
+    if trigger_type == "state":
+        entity_ids = coerce_entity_ids(item.get("entity_id"))
+        payload["entity_ids"] = entity_ids[:10]
+        if item.get("to") is not None:
+            payload["to"] = item.get("to")
+        if item.get("from") is not None:
+            payload["from"] = item.get("from")
+        if item.get("for") is not None:
+            payload["for"] = item.get("for")
+        return payload
+
+    if trigger_type == "time":
+        payload["at"] = item.get("at")
+        return payload
+
+    if trigger_type == "time_pattern":
+        for key in ("hours", "minutes", "seconds"):
+            if item.get(key) is not None:
+                payload[key] = item.get(key)
+        return payload
+
+    if trigger_type == "template":
+        payload.update(summarize_template_hint(str(item.get("value_template", ""))))
+        return payload
+
+    entity_ids = extract_entity_ids(item)
+    if entity_ids:
+        payload["entity_ids"] = entity_ids[:10]
+    payload["keys"] = sorted(str(k) for k in item.keys())[:8]
+    return payload
+
+
+def summarize_condition_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    condition_type = str(item.get("condition", "")).strip() or "unknown"
+    payload: Dict[str, Any] = {"type": condition_type}
+
+    if condition_type == "state":
+        payload["entity_id"] = item.get("entity_id")
+        payload["state"] = item.get("state")
+        if item.get("for") is not None:
+            payload["for"] = item.get("for")
+        return payload
+
+    if condition_type == "numeric_state":
+        payload["entity_id"] = item.get("entity_id")
+        if item.get("above") is not None:
+            payload["above"] = item.get("above")
+        if item.get("below") is not None:
+            payload["below"] = item.get("below")
+        if item.get("for") is not None:
+            payload["for"] = item.get("for")
+        return payload
+
+    if condition_type == "time":
+        for key in ("after", "before", "weekday"):
+            if item.get(key) is not None:
+                payload[key] = item.get(key)
+        return payload
+
+    if condition_type == "template":
+        payload.update(summarize_template_hint(str(item.get("value_template", ""))))
+        return payload
+
+    if condition_type in {"and", "or", "not"}:
+        nested = ensure_list(item.get("conditions"))
+        if condition_type == "not" and not nested and item.get("condition") == "not":
+            nested = ensure_list(item.get("condition"))
+        payload["conditions"] = [summarize_condition_item(node) for node in nested[:4] if isinstance(node, dict)]
+        payload["condition_count"] = len(nested)
+        return payload
+
+    entity_ids = extract_entity_ids(item)
+    if entity_ids:
+        payload["entity_ids"] = entity_ids[:10]
+    payload["keys"] = sorted(str(k) for k in item.keys())[:8]
+    return payload
+
+
+def action_service_name(node: Dict[str, Any]) -> str:
+    return str(node.get("action") or node.get("service") or "").strip()
+
+
+def action_target_entities(node: Dict[str, Any]) -> List[str]:
+    out: List[str] = []
+    for raw in (node.get("entity_id"),):
+        out.extend(coerce_entity_ids(raw))
+    target = node.get("target")
+    if isinstance(target, dict):
+        out.extend(coerce_entity_ids(target.get("entity_id")))
+    data = node.get("data")
+    if isinstance(data, dict):
+        out.extend(coerce_entity_ids(data.get("entity_id")))
+    return sorted(set(out))
+
+
+def summarize_action_item(node: Any) -> Dict[str, Any]:
+    if not isinstance(node, dict):
+        return {"type": "raw", "preview": truncate_preview(str(node))}
+
+    if "delay" in node:
+        return {"type": "delay", "delay": node.get("delay")}
+
+    if "wait_template" in node:
+        return {
+            "type": "wait_template",
+            "preview": truncate_preview(str(node.get("wait_template", ""))),
+        }
+
+    if "choose" in node:
+        branches = ensure_list(node.get("choose"))
+        return {
+            "type": "choose",
+            "branch_count": len(branches),
+            "branches": [
+                {
+                    "conditions": [summarize_condition_item(cond) for cond in ensure_list(branch.get("conditions"))[:3] if isinstance(cond, dict)],
+                    "actions": [summarize_action_item(item) for item in ensure_list(branch.get("sequence"))[:3]],
+                }
+                for branch in branches[:3]
+                if isinstance(branch, dict)
+            ],
+            "default_actions": [summarize_action_item(item) for item in ensure_list(node.get("default"))[:3]],
+        }
+
+    if "if" in node:
+        return {
+            "type": "if",
+            "conditions": [summarize_condition_item(cond) for cond in ensure_list(node.get("if"))[:4] if isinstance(cond, dict)],
+            "then_actions": [summarize_action_item(item) for item in ensure_list(node.get("then"))[:3]],
+            "else_actions": [summarize_action_item(item) for item in ensure_list(node.get("else"))[:3]],
+        }
+
+    if "repeat" in node and isinstance(node.get("repeat"), dict):
+        repeat = node.get("repeat") or {}
+        return {
+            "type": "repeat",
+            "sequence": [summarize_action_item(item) for item in ensure_list(repeat.get("sequence"))[:3]],
+            "until": [summarize_condition_item(cond) for cond in ensure_list(repeat.get("until"))[:3] if isinstance(cond, dict)],
+        }
+
+    service = action_service_name(node)
+    if service:
+        payload: Dict[str, Any] = {"type": "service", "service": service}
+        entities = action_target_entities(node)
+        if entities:
+            payload["entities"] = entities[:10]
+        return payload
+
+    entities = extract_entity_ids(node)
+    payload = {"type": "raw", "keys": sorted(str(k) for k in node.keys())[:8]}
+    if entities:
+        payload["entities"] = entities[:10]
+    return payload
+
+
+def summarize_action_list(actions: Any, limit: int = 6) -> Dict[str, Any]:
+    rows = ensure_list(actions)
+    payload = {
+        "count": len(rows),
+        "items": [summarize_action_item(node) for node in rows[:limit]],
+    }
+    truncated = max(0, len(rows) - limit)
+    if truncated:
+        payload["truncated"] = truncated
+    return payload
+
+
+def summarize_automation_block(block: Dict[str, Any]) -> Dict[str, Any]:
+    triggers = ensure_list(block.get("trigger") or block.get("triggers"))
+    conditions = ensure_list(block.get("condition") or block.get("conditions"))
+    actions = ensure_list(block.get("action") or block.get("actions"))
+    entities = extract_entity_ids(block)
+    return {
+        "alias": str(block.get("alias", "")),
+        "id": str(block.get("id", "")),
+        "enabled": automation_enabled(block),
+        "description": str(block.get("description", "")),
+        "mode": str(block.get("mode", "")),
+        "summary": {
+            "trigger_count": len(triggers),
+            "condition_count": len(conditions),
+            "action_count": len(actions),
+            "entity_count": len(entities),
+        },
+        "triggers": [summarize_trigger_item(node) for node in triggers[:6] if isinstance(node, dict)],
+        "conditions": [summarize_condition_item(node) for node in conditions[:8] if isinstance(node, dict)],
+        "actions": summarize_action_list(actions),
+        "entities": entities[:25],
+    }
+
+
+def summarize_script_block(key: str, block: Dict[str, Any]) -> Dict[str, Any]:
+    sequence = ensure_list(block.get("sequence"))
+    entities = extract_entity_ids(block)
+    return {
+        "key": key,
+        "alias": str(block.get("alias", "")),
+        "mode": str(block.get("mode", "")),
+        "summary": {
+            "action_count": len(sequence),
+            "entity_count": len(entities),
+        },
+        "actions": summarize_action_list(sequence),
+        "entities": entities[:25],
+    }
+
+
+def collect_entity_thresholds(entity_id: str, automations_file: Path) -> Dict[str, Any]:
+    autos = load_automations(automations_file)
+    exact_rules: List[Dict[str, Any]] = []
+    template_rules: List[Dict[str, Any]] = []
+    other_uses: List[Dict[str, Any]] = []
+
+    for automation in autos:
+        alias = str(automation.get("alias", ""))
+        automation_id = str(automation.get("id", ""))
+
+        for trigger in ensure_list(automation.get("trigger") or automation.get("triggers")):
+            if not isinstance(trigger, dict):
+                continue
+            trigger_type = str(trigger.get("trigger", "")).strip()
+            trigger_entities = coerce_entity_ids(trigger.get("entity_id"))
+            if trigger_type == "numeric_state" and entity_id in trigger_entities:
+                exact_rules.append(
+                    {
+                        "scope": "trigger",
+                        "alias": alias,
+                        "id": automation_id,
+                        "entity_id": entity_id,
+                        "above": trigger.get("above"),
+                        "below": trigger.get("below"),
+                        "for": trigger.get("for"),
+                        "certainty": "exact_numeric_state",
+                    }
+                )
+                continue
+            if trigger_type == "template":
+                template = str(trigger.get("value_template", ""))
+                if entity_id in extract_entity_ids(template):
+                    hint = summarize_template_hint(template)
+                    template_rules.append(
+                        {
+                            "scope": "trigger",
+                            "alias": alias,
+                            "id": automation_id,
+                            "certainty": "template_hint",
+                            **hint,
+                        }
+                    )
+                continue
+            if entity_id in trigger_entities:
+                other_uses.append(
+                    {
+                        "scope": "trigger",
+                        "alias": alias,
+                        "id": automation_id,
+                        "type": trigger_type or "unknown",
+                    }
+                )
+
+        for condition in ensure_list(automation.get("condition") or automation.get("conditions")):
+            if not isinstance(condition, dict):
+                continue
+            condition_type = str(condition.get("condition", "")).strip()
+            cond_entity = str(condition.get("entity_id", "")).strip()
+            if condition_type == "numeric_state" and cond_entity == entity_id:
+                exact_rules.append(
+                    {
+                        "scope": "condition",
+                        "alias": alias,
+                        "id": automation_id,
+                        "entity_id": entity_id,
+                        "above": condition.get("above"),
+                        "below": condition.get("below"),
+                        "for": condition.get("for"),
+                        "certainty": "exact_numeric_state",
+                    }
+                )
+                continue
+            if condition_type == "template":
+                template = str(condition.get("value_template", ""))
+                if entity_id in extract_entity_ids(template):
+                    hint = summarize_template_hint(template)
+                    template_rules.append(
+                        {
+                            "scope": "condition",
+                            "alias": alias,
+                            "id": automation_id,
+                            "certainty": "template_hint",
+                            **hint,
+                        }
+                    )
+                continue
+            if cond_entity == entity_id:
+                other_uses.append(
+                    {
+                        "scope": "condition",
+                        "alias": alias,
+                        "id": automation_id,
+                        "type": condition_type or "unknown",
+                    }
+                )
+
+    return {
+        "entity_id": entity_id,
+        "exact_rules": exact_rules,
+        "template_rules": template_rules,
+        "other_uses": other_uses,
+        "summary": {
+            "exact_rule_count": len(exact_rules),
+            "template_rule_count": len(template_rules),
+            "other_use_count": len(other_uses),
+        },
+    }
+
+
+def build_threshold_assessment(entity_id: str, candidate: float, collected: Dict[str, Any]) -> Dict[str, Any]:
+    exact_points: List[Dict[str, Any]] = []
+    for rule in collected.get("exact_rules", []):
+        above = rule.get("above")
+        below = rule.get("below")
+        if above is not None:
+            exact_points.append(
+                {
+                    "value": float(above),
+                    "comparison": "above",
+                    "scope": rule.get("scope"),
+                    "alias": rule.get("alias"),
+                    "id": rule.get("id"),
+                }
+            )
+        if below is not None:
+            exact_points.append(
+                {
+                    "value": float(below),
+                    "comparison": "below",
+                    "scope": rule.get("scope"),
+                    "alias": rule.get("alias"),
+                    "id": rule.get("id"),
+                }
+            )
+
+    exact_points.sort(key=lambda row: (row["value"], row["comparison"], row["alias"] or ""))
+    collisions = [row for row in exact_points if abs(row["value"] - candidate) < 1e-9]
+    lower = [row for row in exact_points if row["value"] < candidate]
+    higher = [row for row in exact_points if row["value"] > candidate]
+    nearest_lower = max(lower, key=lambda row: row["value"], default=None)
+    nearest_higher = min(higher, key=lambda row: row["value"], default=None)
+
+    confidence = "high" if not collected.get("template_rules") else "medium"
+    if collisions:
+        verdict = "exact_collision"
+        reason = (
+            f"Wartość {candidate:g} już występuje jako dokładny próg dla {entity_id} "
+            f"w {len(collisions)} miejscu/miejscach."
+        )
+    elif nearest_lower and nearest_higher:
+        verdict = "between_exact_thresholds"
+        reason = (
+            f"Brak exact progu {candidate:g} dla {entity_id}. "
+            f"Najbliższy niższy próg to {nearest_lower['value']:g}, a najbliższy wyższy to {nearest_higher['value']:g}."
+        )
+    elif nearest_lower:
+        verdict = "above_known_exact_thresholds"
+        reason = (
+            f"Brak exact progu {candidate:g} dla {entity_id}. "
+            f"Najbliższy znany exact próg poniżej to {nearest_lower['value']:g}."
+        )
+    elif nearest_higher:
+        verdict = "below_known_exact_thresholds"
+        reason = (
+            f"Brak exact progu {candidate:g} dla {entity_id}. "
+            f"Najbliższy znany exact próg powyżej to {nearest_higher['value']:g}."
+        )
+    else:
+        verdict = "no_exact_thresholds_found"
+        reason = f"Dla {entity_id} nie znaleziono exact progów numeric_state."
+
+    if collected.get("template_rules"):
+        reason += " Dodatkowo istnieją reguły template odnoszące się do tej encji, więc pełna ocena wymaga uwzględnienia także logiki dynamicznej."
+
+    return {
+        "entity_id": entity_id,
+        "candidate": candidate,
+        "exact_collision": bool(collisions),
+        "collisions": collisions,
+        "nearest_lower": nearest_lower,
+        "nearest_higher": nearest_higher,
+        "margin_to_nearest_lower": None if nearest_lower is None else round(candidate - nearest_lower["value"], 3),
+        "margin_to_nearest_higher": None if nearest_higher is None else round(nearest_higher["value"] - candidate, 3),
+        "template_rule_count": len(collected.get("template_rules", [])),
+        "confidence": confidence,
+        "verdict": verdict,
+        "reason": reason,
+    }
+
+
 def summarize_helpers(storage_dir: Path) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for kind in HELPER_FILES:
@@ -1862,6 +2325,67 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_automation_summary(args: argparse.Namespace) -> int:
+    autos = load_automations(args.automations_file)
+    target = (args.target or "").strip()
+    if not target:
+        raise TalkHaLokalError("Provide --target for automation-summary")
+
+    matches = find_automation_matches(autos, target, args.match_by)
+    if len(matches) > 1:
+        raise TalkHaLokalError(f"Ambiguous automation target: {target}")
+    if not matches:
+        raise TalkHaLokalError(f"Automation target not found: {target}")
+
+    block = autos[matches[0]]
+    print(json.dumps(summarize_automation_block(block), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_script_summary(args: argparse.Namespace) -> int:
+    scripts = load_scripts(args.scripts_file)
+    target = (args.target or "").strip()
+    if not target:
+        raise TalkHaLokalError("Provide --target for script-summary")
+
+    matches = find_script_keys(scripts, target, args.match_by)
+    if len(matches) > 1:
+        raise TalkHaLokalError(f"Ambiguous script target: {target}")
+    if not matches:
+        raise TalkHaLokalError(f"Script target not found: {target}")
+
+    key = matches[0]
+    print(json.dumps(summarize_script_block(key, scripts[key]), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_entity_thresholds(args: argparse.Namespace) -> int:
+    entity_id = (args.entity_id or "").strip()
+    if not entity_id:
+        raise TalkHaLokalError("Provide --entity-id for entity-thresholds")
+    payload = collect_entity_thresholds(entity_id, args.automations_file)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_threshold_check(args: argparse.Namespace) -> int:
+    entity_id = (args.entity_id or "").strip()
+    if not entity_id:
+        raise TalkHaLokalError("Provide --entity-id for threshold-check")
+    collected = collect_entity_thresholds(entity_id, args.automations_file)
+    assessment = build_threshold_assessment(entity_id, float(args.candidate), collected)
+    payload = {
+        "entity_id": entity_id,
+        "candidate": float(args.candidate),
+        "assessment": assessment,
+        "exact_rules": collected.get("exact_rules", []),
+        "template_rules": collected.get("template_rules", []),
+        "other_uses": collected.get("other_uses", [])[:10],
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_get_script(args: argparse.Namespace) -> int:
     scripts = load_scripts(args.scripts_file)
     target = (args.target or "").strip()
@@ -2043,6 +2567,21 @@ def build_parser() -> argparse.ArgumentParser:
     s_snap.add_argument("--limit", type=int, default=25)
     s_snap.add_argument("--entity-limit", type=int, default=120)
 
+    s_as = sub.add_parser("automation-summary", help="Compact summary of one automation")
+    s_as.add_argument("--target", required=True)
+    s_as.add_argument("--match-by", choices=["id", "alias", "id-or-alias"], default="alias")
+
+    s_ss = sub.add_parser("script-summary", help="Compact summary of one script")
+    s_ss.add_argument("--target", required=True)
+    s_ss.add_argument("--match-by", choices=["key", "alias", "key-or-alias"], default="alias")
+
+    s_et = sub.add_parser("entity-thresholds", help="List exact and template threshold rules for one entity")
+    s_et.add_argument("--entity-id", required=True)
+
+    s_tc = sub.add_parser("threshold-check", help="Assess candidate threshold against known rules for one entity")
+    s_tc.add_argument("--entity-id", required=True)
+    s_tc.add_argument("--candidate", required=True, type=float)
+
     s_gs = sub.add_parser("get-script", help="Get full script block by key or alias")
     s_gs.add_argument("--target", required=True)
     s_gs.add_argument("--match-by", choices=["key", "alias", "key-or-alias"], default="key-or-alias")
@@ -2150,6 +2689,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_where_used(args)
         if args.cmd == "snapshot":
             return cmd_snapshot(args)
+        if args.cmd == "automation-summary":
+            return cmd_automation_summary(args)
+        if args.cmd == "script-summary":
+            return cmd_script_summary(args)
+        if args.cmd == "entity-thresholds":
+            return cmd_entity_thresholds(args)
+        if args.cmd == "threshold-check":
+            return cmd_threshold_check(args)
         if args.cmd == "get-script":
             return cmd_get_script(args)
         if args.cmd == "get-automation":

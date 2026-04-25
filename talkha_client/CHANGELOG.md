@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.29
+- New: `automation-summary` and `script-summary` return compact, operator-friendly summaries of triggers, conditions, actions and key entities, so common diagnostics no longer require reading full YAML blocks.
+- New: `entity-thresholds` and `threshold-check` return exact `numeric_state` thresholds plus template-based threshold hints for one entity, including a compact verdict for candidate values such as `24.0`.
+- Improved: operator workflow can now use a synchronous `run-job` path and compact `hx` shortcuts (`auto-summary`, `script-summary`, `thresholds`, `threshold-check`) that return the final payload directly instead of forcing a separate `wait/result` round-trip for common diagnostics.
+
 ## 0.2.28
 - Improved: `diagnoza-automatyzacji` now detects a practical `numeric_state` failure mode where the threshold was already satisfied before the remaining conditions became true, and reports it directly as the likely root cause instead of leaving only raw traces and state dumps.
 
