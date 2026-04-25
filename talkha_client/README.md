@@ -26,3 +26,5 @@ Autor: Tomasz Furdal, ha-expert.com
 - zdalny runtime udostepnia tez `entity-thresholds` i `threshold-check`, aby sprawdzac progi temperatur i ryzyko kolizji bez recznego skladania kilku komend
 - `diagnoza-automatyzacji` rozbija teraz sloty zarowno dla harmonogramow `time_pattern`, jak i dla stalych triggerow `time`
 - `diagnoza-automatyzacji` wykrywa teraz tez przypadek `numeric_state`, gdy prog byl juz spelniony zanim pozostale warunki zrobily sie prawdziwe
+- zdalny runtime umie teraz bez SSH bezpiecznie mutowac automatyzacje, skrypty i helpery GUI z backupem oraz `tx-report` / rollbackiem po stronie operatora
+- po stronie operatora wrapper `hx` ma teraz krotkie, synchroniczne sciezki do diagnostyki i mutacji, w tym `tx-summary`, `upsert-automation`, `delete-automation`, `upsert-script`, `delete-script`, `helper-upsert`, `helper-delete` i `rollback-tx`

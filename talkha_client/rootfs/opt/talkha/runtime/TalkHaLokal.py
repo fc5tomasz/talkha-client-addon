@@ -790,6 +790,34 @@ def action_target_entities(node: Dict[str, Any]) -> List[str]:
     return sorted(set(out))
 
 
+def collect_service_names(node: Any, limit: int = 6) -> List[str]:
+    found: List[str] = []
+    seen = set()
+
+    def walk(value: Any) -> None:
+        nonlocal found
+        if len(found) >= limit:
+            return
+        if isinstance(value, dict):
+            service = action_service_name(value)
+            if service and service not in seen:
+                seen.add(service)
+                found.append(service)
+                if len(found) >= limit:
+                    return
+            for item in value.values():
+                walk(item)
+            return
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+                if len(found) >= limit:
+                    return
+
+    walk(node)
+    return found
+
+
 def summarize_action_item(node: Any) -> Dict[str, Any]:
     if not isinstance(node, dict):
         return {"type": "raw", "preview": truncate_preview(str(node))}
@@ -808,31 +836,26 @@ def summarize_action_item(node: Any) -> Dict[str, Any]:
         return {
             "type": "choose",
             "branch_count": len(branches),
-            "branches": [
-                {
-                    "conditions": [summarize_condition_item(cond) for cond in ensure_list(branch.get("conditions"))[:3] if isinstance(cond, dict)],
-                    "actions": [summarize_action_item(item) for item in ensure_list(branch.get("sequence"))[:3]],
-                }
-                for branch in branches[:3]
-                if isinstance(branch, dict)
-            ],
-            "default_actions": [summarize_action_item(item) for item in ensure_list(node.get("default"))[:3]],
+            "service_names": collect_service_names(node),
+            "default_count": len(ensure_list(node.get("default"))),
         }
 
     if "if" in node:
         return {
             "type": "if",
-            "conditions": [summarize_condition_item(cond) for cond in ensure_list(node.get("if"))[:4] if isinstance(cond, dict)],
-            "then_actions": [summarize_action_item(item) for item in ensure_list(node.get("then"))[:3]],
-            "else_actions": [summarize_action_item(item) for item in ensure_list(node.get("else"))[:3]],
+            "condition_count": len([cond for cond in ensure_list(node.get("if")) if isinstance(cond, dict)]),
+            "then_count": len(ensure_list(node.get("then"))),
+            "else_count": len(ensure_list(node.get("else"))),
+            "service_names": collect_service_names(node),
         }
 
     if "repeat" in node and isinstance(node.get("repeat"), dict):
         repeat = node.get("repeat") or {}
         return {
             "type": "repeat",
-            "sequence": [summarize_action_item(item) for item in ensure_list(repeat.get("sequence"))[:3]],
-            "until": [summarize_condition_item(cond) for cond in ensure_list(repeat.get("until"))[:3] if isinstance(cond, dict)],
+            "sequence_count": len(ensure_list(repeat.get("sequence"))),
+            "until_count": len([cond for cond in ensure_list(repeat.get("until")) if isinstance(cond, dict)]),
+            "service_names": collect_service_names(repeat),
         }
 
     service = action_service_name(node)
@@ -855,6 +878,7 @@ def summarize_action_list(actions: Any, limit: int = 6) -> Dict[str, Any]:
     payload = {
         "count": len(rows),
         "items": [summarize_action_item(node) for node in rows[:limit]],
+        "service_names": collect_service_names(rows),
     }
     truncated = max(0, len(rows) - limit)
     if truncated:
@@ -1090,6 +1114,165 @@ def build_threshold_assessment(entity_id: str, candidate: float, collected: Dict
         "verdict": verdict,
         "reason": reason,
     }
+
+
+def compact_automation_summary_payload(summary: Dict[str, Any]) -> Dict[str, Any]:
+    actions = summary.get("actions", {})
+    return {
+        "alias": summary.get("alias"),
+        "id": summary.get("id"),
+        "enabled": summary.get("enabled"),
+        "description": summary.get("description"),
+        "mode": summary.get("mode"),
+        "summary": summary.get("summary", {}),
+        "triggers": summary.get("triggers", []),
+        "conditions": summary.get("conditions", []),
+        "actions": {
+            "count": actions.get("count", 0),
+            "service_names": actions.get("service_names", []),
+        },
+        "entities": summary.get("entities", [])[:15],
+    }
+
+
+def compact_script_summary_payload(summary: Dict[str, Any]) -> Dict[str, Any]:
+    actions = summary.get("actions", {})
+    return {
+        "key": summary.get("key"),
+        "alias": summary.get("alias"),
+        "mode": summary.get("mode"),
+        "summary": summary.get("summary", {}),
+        "actions": {
+            "count": actions.get("count", 0),
+            "service_names": actions.get("service_names", []),
+        },
+        "entities": summary.get("entities", [])[:15],
+    }
+
+
+def compact_threshold_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {
+        "alias": rule.get("alias"),
+        "id": rule.get("id"),
+        "scope": rule.get("scope"),
+        "certainty": rule.get("certainty"),
+    }
+    if rule.get("above") is not None:
+        payload["above"] = rule.get("above")
+    if rule.get("below") is not None:
+        payload["below"] = rule.get("below")
+    if rule.get("numbers"):
+        payload["numbers"] = rule.get("numbers")
+    if rule.get("entities"):
+        payload["entities"] = rule.get("entities")
+    return payload
+
+
+def compact_entity_thresholds_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    exact_rules = payload.get("exact_rules", [])
+    template_rules = payload.get("template_rules", [])
+    return {
+        "entity_id": payload.get("entity_id"),
+        "summary": payload.get("summary", {}),
+        "exact_rules": [compact_threshold_rule(rule) for rule in exact_rules],
+        "template_rules": [compact_threshold_rule(rule) for rule in template_rules],
+        "other_uses": payload.get("other_uses", [])[:6],
+    }
+
+
+def compact_threshold_check_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    assessment = payload.get("assessment", {})
+    compact = {
+        "entity_id": payload.get("entity_id"),
+        "candidate": payload.get("candidate"),
+        "assessment": {
+            "verdict": assessment.get("verdict"),
+            "confidence": assessment.get("confidence"),
+            "reason": assessment.get("reason"),
+            "exact_collision": assessment.get("exact_collision"),
+            "nearest_lower": assessment.get("nearest_lower"),
+            "nearest_higher": assessment.get("nearest_higher"),
+            "margin_to_nearest_lower": assessment.get("margin_to_nearest_lower"),
+            "margin_to_nearest_higher": assessment.get("margin_to_nearest_higher"),
+            "template_rule_count": assessment.get("template_rule_count"),
+        },
+        "exact_rules": [compact_threshold_rule(rule) for rule in payload.get("exact_rules", [])],
+    }
+    if payload.get("template_rules"):
+        compact["template_rule_aliases"] = [str(rule.get("alias", "")) for rule in payload.get("template_rules", [])]
+    return compact
+
+
+def compact_diag_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    trigger_analysis = payload.get("analiza_triggerow", [])
+    slot_analysis = payload.get("analiza_slotow", [])
+    run_rows = payload.get("uruchomienia", [])
+    compact_slots: List[Dict[str, Any]] = []
+    for row in slot_analysis[:3]:
+        slots = row.get("slots", [])
+        compact_slots.append(
+            {
+                "alias": row.get("alias"),
+                "id": row.get("id"),
+                "triggered_slots": [slot.get("slot") for slot in slots if slot.get("triggered")][:6],
+                "blocked_slots": [
+                    {
+                        "slot": slot.get("slot"),
+                        "blocked_by": slot.get("blocked_by", []),
+                    }
+                    for slot in slots
+                    if slot.get("conditions_ok") is False
+                ][:6],
+            }
+        )
+    return {
+        "target": payload.get("target"),
+        "match_by": payload.get("match_by"),
+        "automations": [
+            {
+                "alias": row.get("alias"),
+                "id": row.get("id"),
+            }
+            for row in payload.get("automatyzacje", [])[:5]
+        ],
+        "runs": [
+            {
+                "alias": row.get("alias"),
+                "count": row.get("count"),
+                "ok": row.get("ok"),
+            }
+            for row in run_rows[:5]
+        ],
+        "trigger_analysis": trigger_analysis[:3],
+        "slot_analysis": compact_slots,
+        "facts": payload.get("fakty", [])[:5],
+        "missing_evidence": payload.get("braki_dowodowe", [])[:5],
+        "conclusion": payload.get("wniosek", ""),
+    }
+
+
+def compact_tx_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    checks = payload.get("checks", {})
+    ha_core = checks.get("ha_core_check", {})
+    reload_row = checks.get("reload", {})
+    reload_results = reload_row.get("results", []) if isinstance(reload_row, dict) else []
+    reload_services = [f"{row.get('domain')}.{row.get('service')}" for row in reload_results if isinstance(row, dict)]
+    compact = {
+        "tx_id": payload.get("tx_id"),
+        "status": payload.get("status"),
+        "message": payload.get("message"),
+        "backup_dir": payload.get("backup_dir"),
+        "checks": {
+            "ha_core_check_ok": ha_core.get("ok"),
+            "reload_ok": reload_row.get("ok") if isinstance(reload_row, dict) else None,
+            "reload_services": reload_services,
+        },
+        "rollback": payload.get("rollback"),
+    }
+    for key in ("replaced", "removed", "removed_alias", "removed_id", "removed_key", "key", "kind", "helper", "entity_id"):
+        if key in payload:
+            compact[key] = payload.get(key)
+    return compact
 
 
 def summarize_helpers(storage_dir: Path) -> Dict[str, Any]:
@@ -2245,8 +2428,94 @@ def cmd_helper_upsert(args: argparse.Namespace, txm: TxManager) -> int:
         raise
 
 
+def cmd_helper_delete(args: argparse.Namespace, txm: TxManager) -> int:
+    helper_id = normalize_helper_id(args.kind, args.helper)
+
+    tx = txm.start(
+        "helper-delete",
+        {"kind": args.kind, "helper": helper_id, "backup_dir": str(args.backup_dir)},
+    )
+    txm.set_phase(tx, "started")
+    try:
+        with file_mutex(txm.state_dir, f"mutation_helper_{args.kind}"):
+            txm.set_phase(tx, "locked")
+            txm.backup_files(
+                tx,
+                [
+                    get_helper_path(args.storage_dir, args.kind),
+                    args.storage_dir / "core.entity_registry",
+                ],
+                args.backup_dir,
+            )
+            txm.set_phase(tx, "backed_up")
+
+            result = run_external(
+                [
+                    "python3",
+                    str(args.talkha_runtime),
+                    "helper-delete",
+                    "--kind",
+                    args.kind,
+                    "--helper",
+                    f"{args.kind}.{helper_id}",
+                    "--explicit-confirm",
+                    "REQUIRED",
+                ]
+            )
+            txm.add_runtime_action(tx, {"type": "talkha_helper_delete", **result})
+            txm.set_check(tx, "talkha_helper_delete", result)
+            if not result["ok"]:
+                txm.finish(tx, "error", "TalkHa.py helper-delete failed")
+                raise TalkHaLokalError(result["stderr"] or result["stdout"] or "TalkHa.py helper-delete failed")
+            txm.set_phase(tx, "runtime_ok")
+
+            list_result = run_external(
+                [
+                    "python3",
+                    str(args.talkha_runtime),
+                    "helper-list",
+                    "--kind",
+                    args.kind,
+                    "--as-json",
+                ]
+            )
+            txm.set_check(tx, "helper_list", list_result)
+            if not list_result["ok"]:
+                txm.finish(tx, "error", "TalkHa.py helper-list failed after delete")
+                raise TalkHaLokalError(list_result["stderr"] or list_result["stdout"] or "TalkHa.py helper-list failed")
+            try:
+                listed = json.loads(list_result["stdout"])
+            except Exception as exc:
+                txm.finish(tx, "error", f"Invalid JSON from helper-list: {exc}")
+                raise TalkHaLokalError(f"Invalid JSON from helper-list: {exc}") from exc
+            entity_id = f"{args.kind}.{helper_id}"
+            found = any(isinstance(row, dict) and str(row.get("entity_id", "")) == entity_id for row in listed)
+            integrity = {"ok": not found, "changed_only_target": True, "entity_id": entity_id, "removed": True}
+            txm.set_check(tx, "integrity", integrity)
+            if found:
+                txm.finish(tx, "error", f"Helper still visible in runtime after delete: {entity_id}")
+                raise TalkHaLokalError(f"Helper still visible in runtime after delete: {entity_id}")
+            txm.set_phase(tx, "integrity_ok")
+
+            txm.finish(tx, "ok", "helper delete applied via TalkHa.py GUI/API path")
+            print(json.dumps(success_payload(txm, tx, {"removed": True, "kind": args.kind, "helper": helper_id, "entity_id": entity_id}), ensure_ascii=False))
+            return 0
+    except BaseException as exc:
+        finalize_interrupted_mutation(
+            tx,
+            txm,
+            args.ha_host,
+            args.talkha_runtime,
+            [],
+            exc,
+        )
+        raise
+
+
 def cmd_tx_report(args: argparse.Namespace, txm: TxManager) -> int:
     data = txm.load_tx_by_id(args.tx_id)
+    if args.compact:
+        data = compact_tx_payload(data)
     print(json.dumps(data, ensure_ascii=False, indent=2))
     return 0
 
@@ -2338,7 +2607,10 @@ def cmd_automation_summary(args: argparse.Namespace) -> int:
         raise TalkHaLokalError(f"Automation target not found: {target}")
 
     block = autos[matches[0]]
-    print(json.dumps(summarize_automation_block(block), ensure_ascii=False, indent=2))
+    payload = summarize_automation_block(block)
+    if args.compact:
+        payload = compact_automation_summary_payload(payload)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -2355,7 +2627,10 @@ def cmd_script_summary(args: argparse.Namespace) -> int:
         raise TalkHaLokalError(f"Script target not found: {target}")
 
     key = matches[0]
-    print(json.dumps(summarize_script_block(key, scripts[key]), ensure_ascii=False, indent=2))
+    payload = summarize_script_block(key, scripts[key])
+    if args.compact:
+        payload = compact_script_summary_payload(payload)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -2364,6 +2639,8 @@ def cmd_entity_thresholds(args: argparse.Namespace) -> int:
     if not entity_id:
         raise TalkHaLokalError("Provide --entity-id for entity-thresholds")
     payload = collect_entity_thresholds(entity_id, args.automations_file)
+    if args.compact:
+        payload = compact_entity_thresholds_payload(payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
@@ -2382,6 +2659,8 @@ def cmd_threshold_check(args: argparse.Namespace) -> int:
         "template_rules": collected.get("template_rules", []),
         "other_uses": collected.get("other_uses", [])[:10],
     }
+    if args.compact:
+        payload = compact_threshold_check_payload(payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
@@ -2531,6 +2810,8 @@ def cmd_diagnoza_automatyzacji(args: argparse.Namespace) -> int:
         "braki_dowodowe": result.get("brakujace_dowody", []),
         "wniosek": result.get("wniosek", ""),
     }
+    if args.compact:
+        payload = compact_diag_payload(payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
@@ -2570,17 +2851,21 @@ def build_parser() -> argparse.ArgumentParser:
     s_as = sub.add_parser("automation-summary", help="Compact summary of one automation")
     s_as.add_argument("--target", required=True)
     s_as.add_argument("--match-by", choices=["id", "alias", "id-or-alias"], default="alias")
+    s_as.add_argument("--compact", action="store_true")
 
     s_ss = sub.add_parser("script-summary", help="Compact summary of one script")
     s_ss.add_argument("--target", required=True)
     s_ss.add_argument("--match-by", choices=["key", "alias", "key-or-alias"], default="alias")
+    s_ss.add_argument("--compact", action="store_true")
 
     s_et = sub.add_parser("entity-thresholds", help="List exact and template threshold rules for one entity")
     s_et.add_argument("--entity-id", required=True)
+    s_et.add_argument("--compact", action="store_true")
 
     s_tc = sub.add_parser("threshold-check", help="Assess candidate threshold against known rules for one entity")
     s_tc.add_argument("--entity-id", required=True)
     s_tc.add_argument("--candidate", required=True, type=float)
+    s_tc.add_argument("--compact", action="store_true")
 
     s_gs = sub.add_parser("get-script", help="Get full script block by key or alias")
     s_gs.add_argument("--target", required=True)
@@ -2598,6 +2883,7 @@ def build_parser() -> argparse.ArgumentParser:
     s_daig.add_argument("--trace-limit", type=int, default=5)
     s_daig.add_argument("--state-limit", type=int, default=20)
     s_daig.add_argument("--tx-limit", type=int, default=10)
+    s_daig.add_argument("--compact", action="store_true")
 
     s_inv = sub.add_parser("investigate", help="Compact read-only investigation for automations/scripts/entities")
     s_inv.add_argument("--query", required=True)
@@ -2665,8 +2951,14 @@ def build_parser() -> argparse.ArgumentParser:
     s_hu.add_argument("--item-json", required=True)
     s_hu.add_argument("--backup-dir", type=Path, required=True)
 
+    s_hd = sub.add_parser("helper-delete", help="Delete GUI helper via TalkHa.py WebSocket/API path")
+    s_hd.add_argument("--kind", required=True, choices=sorted(HELPER_FILES.keys()))
+    s_hd.add_argument("--helper", required=True)
+    s_hd.add_argument("--backup-dir", type=Path, required=True)
+
     s_tr = sub.add_parser("tx-report", help="Show transaction report")
     s_tr.add_argument("--tx-id", required=True)
+    s_tr.add_argument("--compact", action="store_true")
 
     s_rb = sub.add_parser("rollback", help="Restore files from transaction backup")
     s_rb.add_argument("--tx-id", required=True)
@@ -2723,6 +3015,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_delete_script(args, txm)
         if args.cmd == "helper-upsert":
             return cmd_helper_upsert(args, txm)
+        if args.cmd == "helper-delete":
+            return cmd_helper_delete(args, txm)
         if args.cmd == "tx-report":
             return cmd_tx_report(args, txm)
         if args.cmd == "rollback":

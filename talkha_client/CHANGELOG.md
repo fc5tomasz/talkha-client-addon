@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.30
+- Improved: compact operator payloads are now the default path for `automation-summary`, `script-summary`, `entity-thresholds`, `threshold-check`, `diagnoza-automatyzacji` and `tx-report`, so common diagnostics and transaction reports stay high-signal without flooding the operator with raw YAML or low-value metadata.
+- New: remote mutation workflow now supports both `helper-upsert` and `helper-delete` with backup-aware transaction tracking, so automations, scripts and GUI helpers can all be managed through the client add-on without SSH.
+- Improved: operator-side `hx` workflow now has compact mutation wrappers such as `tx-summary`, `upsert-automation`, `delete-automation`, `upsert-script`, `delete-script`, `helper-upsert`, `helper-delete` and `rollback-tx`, so the normal service path no longer requires manual `job -> wait -> result` handling for routine work.
+
 ## 0.2.29
 - New: `automation-summary` and `script-summary` return compact, operator-friendly summaries of triggers, conditions, actions and key entities, so common diagnostics no longer require reading full YAML blocks.
 - New: `entity-thresholds` and `threshold-check` return exact `numeric_state` thresholds plus template-based threshold hints for one entity, including a compact verdict for candidate values such as `24.0`.

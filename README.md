@@ -12,3 +12,7 @@ Klient:
 
 Add-on nie wystawia publicznego portu.
 Laczy sie wychodzaco do `talkha-operator-server`.
+
+Po stronie operatora preferowany workflow to wrapper `hx`, ktory daje:
+- kompaktowa diagnostyke (`doctor`, `auto-summary`, `script-summary`, `thresholds`, `threshold-check`, `diag-auto`)
+- bezpieczne mutacje z backupem i krotkim raportem transakcji (`upsert-automation`, `delete-automation`, `upsert-script`, `delete-script`, `helper-upsert`, `helper-delete`, `tx-summary`, `rollback-tx`)
