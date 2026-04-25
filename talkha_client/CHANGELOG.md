@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.26
+- New: remote `TalkHa.py` now supports `get-state`, `last-trigger`, `state-history`, `recent-changes` and `set-helper`, so the client runtime exposes the same core runtime diagnostics that are already standard in the local Ubuntu workflow.
+- New: remote `TalkHaLokal.py` now supports `where-used --entity ...`, so exact entity usage in automations, scripts and Lovelace no longer requires manual grep or SSH on the client side.
+- Improved: operator workflow now exposes explicit job statuses `queued`, `running` and `completed` instead of returning a raw `404` before the result exists.
+- Improved: operator CLI now supports `wait`, and `hx` now has `doctor` / `install-check` plus shortcuts for the newly exposed runtime commands.
+
 ## 0.2.25
 - Bugfix: Dockerfile now uses the official multi-architecture Home Assistant base image as the default `BUILD_FROM`, so Supervisor can build the add-on even when it does not inject `BUILD_FROM` explicitly.
 

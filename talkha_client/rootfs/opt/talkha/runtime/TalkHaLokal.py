@@ -711,6 +711,136 @@ def cmd_find(args: argparse.Namespace) -> int:
     return 0
 
 
+def usage_path_to_string(path: Tuple[Any, ...]) -> str:
+    if not path:
+        return "$"
+    parts = ["$"]
+    for item in path:
+        if isinstance(item, int):
+            parts.append(f"[{item}]")
+        else:
+            parts.append(f".{item}")
+    return "".join(parts)
+
+
+def truncate_preview(value: str, limit: int = 180) -> str:
+    text = " ".join(value.strip().split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def iter_string_matches(obj: Any, target: str, path: Tuple[Any, ...] = tuple()) -> Iterable[Tuple[Tuple[Any, ...], str]]:
+    if isinstance(obj, str):
+        if target in obj:
+            yield path, obj
+        return
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            yield from iter_string_matches(value, target, path + (key,))
+        return
+    if isinstance(obj, list):
+        for idx, value in enumerate(obj):
+            yield from iter_string_matches(value, target, path + (idx,))
+
+
+def classify_usage(path: Tuple[Any, ...], source_type: str) -> str:
+    if source_type == "lovelace":
+        return "lovelace"
+    lowered = [str(item).lower() for item in path if not isinstance(item, int)]
+    if any(item in {"trigger", "triggers"} for item in lowered):
+        return "trigger"
+    if any(item in {"condition", "conditions"} for item in lowered):
+        return "condition"
+    if any(item in {"action", "actions", "sequence", "choose", "default", "then", "else"} for item in lowered):
+        return "action"
+    if any("template" in item for item in lowered):
+        return "template"
+    return "config"
+
+
+def iter_lovelace_files(storage_dir: Path) -> List[Path]:
+    if not storage_dir.exists():
+        return []
+    return sorted(
+        path
+        for path in storage_dir.iterdir()
+        if path.is_file() and path.name.startswith("lovelace")
+    )
+
+
+def cmd_where_used(args: argparse.Namespace) -> int:
+    entity_id = args.entity.strip()
+    if not entity_id:
+        raise TalkHaLokalError("--entity cannot be empty")
+
+    matches: List[Dict[str, Any]] = []
+    autos = load_automations(args.automations_file)
+    scripts = load_scripts(args.scripts_file)
+
+    for automation in autos:
+        alias = str(automation.get("alias", ""))
+        auto_id = str(automation.get("id", ""))
+        for path, raw_value in iter_string_matches(automation, entity_id):
+            matches.append(
+                {
+                    "source_type": "automation",
+                    "source_file": str(args.automations_file),
+                    "alias": alias,
+                    "id": auto_id,
+                    "usage": classify_usage(path, "automation"),
+                    "path": usage_path_to_string(path),
+                    "preview": truncate_preview(raw_value),
+                }
+            )
+
+    for key, body in scripts.items():
+        alias = str(body.get("alias", ""))
+        for path, raw_value in iter_string_matches(body, entity_id):
+            matches.append(
+                {
+                    "source_type": "script",
+                    "source_file": str(args.scripts_file),
+                    "key": key,
+                    "alias": alias,
+                    "usage": classify_usage(path, "script"),
+                    "path": usage_path_to_string(path),
+                    "preview": truncate_preview(raw_value),
+                }
+            )
+
+    for lovelace_file in iter_lovelace_files(args.storage_dir):
+        try:
+            data = load_json_file(lovelace_file)
+        except Exception:
+            continue
+        for path, raw_value in iter_string_matches(data, entity_id):
+            matches.append(
+                {
+                    "source_type": "lovelace",
+                    "source_file": str(lovelace_file),
+                    "usage": "lovelace",
+                    "path": usage_path_to_string(path),
+                    "preview": truncate_preview(raw_value),
+                }
+            )
+
+    summary = Counter(match["source_type"] for match in matches)
+    payload = {
+        "entity_id": entity_id,
+        "count": len(matches),
+        "summary": {
+            "automations": summary.get("automation", 0),
+            "scripts": summary.get("script", 0),
+            "lovelace": summary.get("lovelace", 0),
+        },
+        "matches": matches[: args.limit],
+        "truncated": max(0, len(matches) - args.limit),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def parse_block_yaml(path: Path) -> Dict[str, Any]:
     obj = load_yaml(path)
     if isinstance(obj, list):
@@ -1903,6 +2033,10 @@ def build_parser() -> argparse.ArgumentParser:
     s_find = sub.add_parser("find", help="Find by query")
     s_find.add_argument("--query", required=True)
 
+    s_where = sub.add_parser("where-used", help="Find exact entity_id usage in automations, scripts and Lovelace")
+    s_where.add_argument("--entity", required=True)
+    s_where.add_argument("--limit", type=int, default=120)
+
     s_snap = sub.add_parser("snapshot", help="Compact topic snapshot for LLM")
     s_snap.add_argument("--topic", default="")
     s_snap.add_argument("--limit", type=int, default=25)
@@ -2011,6 +2145,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_scan(args)
         if args.cmd == "find":
             return cmd_find(args)
+        if args.cmd == "where-used":
+            return cmd_where_used(args)
         if args.cmd == "snapshot":
             return cmd_snapshot(args)
         if args.cmd == "get-script":

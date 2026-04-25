@@ -556,6 +556,109 @@ def run_recorder_query_via_ssh(base_dir: Path, sql: str, ha_host: str = "root@19
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
+def sql_quote(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
+
+
+def build_state_history(
+    rows: List[str],
+    entity_ids: List[str],
+    from_time: dt.datetime,
+    to_time: dt.datetime,
+    limit: int,
+) -> Dict[str, Any]:
+    if limit < 1:
+        raise TalkHaError("--limit must be >= 1")
+    wanted = [entity_id.strip() for entity_id in entity_ids if entity_id.strip()]
+    outputs: List[Dict[str, Any]] = []
+    for row in rows:
+        parts = row.split("\t", 5)
+        if len(parts) != 6:
+            continue
+        entity_id, ts_raw, state, old_state, context_id, attributes_json = parts
+        try:
+            ts_val = float(ts_raw)
+        except ValueError:
+            continue
+        item: Dict[str, Any] = {
+            "entity_id": entity_id,
+            "czas": format_system_log_timestamp(ts_val),
+            "state": state,
+            "old_state": old_state if old_state != "<null>" else None,
+            "context_id": context_id if context_id != "<null>" else "",
+        }
+        if attributes_json not in ("", "<null>"):
+            try:
+                attrs = json.loads(attributes_json)
+            except Exception:
+                attrs = attributes_json
+            item["attributes"] = attrs
+        outputs.append(item)
+
+    per_entity: Dict[str, List[Dict[str, Any]]] = {entity_id: [] for entity_id in wanted}
+    for item in outputs:
+        per_entity.setdefault(item["entity_id"], []).append(item)
+
+    for entity_id in per_entity:
+        per_entity[entity_id] = per_entity[entity_id][:limit]
+
+    return {
+        "ok": True,
+        "czas_pobrania": dt.datetime.now().astimezone().isoformat(),
+        "zrodlo_danych": "MariaDB Recorder",
+        "okno_czasu": {"od": from_time.isoformat(), "do": to_time.isoformat()},
+        "filtry": {"entity_ids": wanted, "limit": limit},
+        "historia": per_entity,
+    }
+
+
+def build_recent_changes(
+    rows: List[str],
+    entity_ids: List[str],
+    from_time: dt.datetime,
+    to_time: dt.datetime,
+    limit: int,
+) -> Dict[str, Any]:
+    if limit < 1:
+        raise TalkHaError("--limit must be >= 1")
+    outputs: List[Dict[str, Any]] = []
+    for row in rows:
+        parts = row.split("\t", 5)
+        if len(parts) != 6:
+            continue
+        entity_id, ts_raw, state, old_state, context_id, attributes_json = parts
+        try:
+            ts_val = float(ts_raw)
+        except ValueError:
+            continue
+        item: Dict[str, Any] = {
+            "entity_id": entity_id,
+            "czas": format_system_log_timestamp(ts_val),
+            "state": state,
+            "old_state": old_state if old_state != "<null>" else None,
+            "context_id": context_id if context_id != "<null>" else "",
+        }
+        if attributes_json not in ("", "<null>"):
+            try:
+                attrs = json.loads(attributes_json)
+            except Exception:
+                attrs = attributes_json
+            if isinstance(attrs, dict) and "friendly_name" in attrs:
+                item["friendly_name"] = attrs.get("friendly_name")
+        outputs.append(item)
+
+    outputs.sort(key=lambda item: item.get("czas", ""), reverse=True)
+    outputs = outputs[:limit]
+    return {
+        "ok": True,
+        "czas_pobrania": dt.datetime.now().astimezone().isoformat(),
+        "zrodlo_danych": "MariaDB Recorder",
+        "okno_czasu": {"od": from_time.isoformat(), "do": to_time.isoformat()},
+        "filtry": {"entity_ids": entity_ids, "limit": limit},
+        "zmiany": outputs,
+    }
+
+
 def normalize_message_kind(value: str) -> str:
     kind = (value or "all").strip().lower()
     if kind not in {"all", "tts", "telegram"}:
@@ -1854,6 +1957,24 @@ async def run_async(args: argparse.Namespace) -> int:
                     )
             return 0
 
+        if args.cmd == "last-trigger":
+            ctx = await ensure_ws()
+            states = await ws_success(ctx, {"type": "get_states"})
+            if not isinstance(states, list):
+                raise TalkHaError("Unexpected get_states response")
+            st = find_automation_state([row for row in states if isinstance(row, dict)], args.automation_ref)
+            attrs = st.get("attributes", {}) if isinstance(st.get("attributes"), dict) else {}
+            result = {
+                "entity_id": str(st.get("entity_id", "")),
+                "state": st.get("state"),
+                "id": attrs.get("id"),
+                "friendly_name": attrs.get("friendly_name"),
+                "last_triggered": attrs.get("last_triggered"),
+                "mode": attrs.get("mode"),
+            }
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
         if args.cmd == "ws-call":
             payload = parse_json_arg(args.payload_json, "--payload-json")
             if "type" in payload:
@@ -1979,6 +2100,45 @@ async def run_async(args: argparse.Namespace) -> int:
             print(json.dumps(target, ensure_ascii=False, indent=2))
             return 0
 
+        if args.cmd == "get-state":
+            ctx = await ensure_ws()
+            states = await ws_success(ctx, {"type": "get_states"})
+            if not isinstance(states, list):
+                raise TalkHaError("Unexpected get_states response")
+            wanted = [item.strip() for item in args.entity_ids if item.strip()]
+            by_entity: Dict[str, Dict[str, Any]] = {}
+            for row in states:
+                if not isinstance(row, dict):
+                    continue
+                entity_id = str(row.get("entity_id", "")).strip()
+                if entity_id:
+                    by_entity[entity_id] = row
+            out: List[Dict[str, Any]] = []
+            for entity_id in wanted:
+                row = by_entity.get(entity_id)
+                if row is None:
+                    out.append({"entity_id": entity_id, "found": False})
+                    continue
+                attrs = row.get("attributes", {}) if isinstance(row.get("attributes"), dict) else {}
+                item = {
+                    "entity_id": entity_id,
+                    "found": True,
+                    "state": row.get("state"),
+                    "friendly_name": attrs.get("friendly_name", ""),
+                }
+                if args.with_attributes:
+                    item["attributes"] = attrs
+                out.append(item)
+            if args.as_json:
+                print(json.dumps(out, ensure_ascii=False, indent=2))
+            else:
+                for item in out:
+                    if not item.get("found"):
+                        print(f"{item['entity_id']}\tNOT_FOUND")
+                        continue
+                    print(f"{item['entity_id']}\t{item.get('state','')}\t{item.get('friendly_name','')}")
+            return 0
+
         if args.cmd == "lights-on-report":
             ctx = await ensure_ws()
             states = await ws_success(ctx, {"type": "get_states"})
@@ -2063,6 +2223,59 @@ async def run_async(args: argparse.Namespace) -> int:
                 )
             )
             txm.finish(tx_info["tx_dir"], tx_info["tx"], "ok", f"Helper {action} via GUI/API")
+            return 0
+
+        if args.cmd == "set-helper":
+            require_explicit(args.explicit_confirm, "set-helper")
+            entity_id = str(args.entity_id).strip()
+            if not entity_id:
+                raise TalkHaError("set-helper requires non-empty entity_id")
+            kind = infer_set_helper_kind(args.kind, entity_id)
+            raw_value = args.value
+
+            if kind == "input_boolean":
+                service, data = parse_boolean_helper_value(raw_value)
+            elif kind == "input_number":
+                service = "set_value"
+                data = {"value": parse_number_helper_value(raw_value)}
+            elif kind == "input_text":
+                service = "set_value"
+                data = {"value": raw_value}
+            else:
+                raise TalkHaError(f"Unsupported helper kind: {kind}")
+
+            tx_info = txm.start(
+                "set-helper",
+                {"kind": kind, "entity_id": entity_id, "value": raw_value, "service": service},
+            )
+            txm.backup_files(tx_info["tx_dir"], tx_info["tx"], default_backup_paths(base_dir))
+            txm.note(tx_info["tx"], "Set helper via service call")
+
+            ctx = await ensure_ws()
+            result = await ws_success(
+                ctx,
+                {
+                    "type": "call_service",
+                    "domain": kind,
+                    "service": service,
+                    "target": {"entity_id": entity_id},
+                    "service_data": data,
+                },
+            )
+            print(
+                json.dumps(
+                    {
+                        "kind": kind,
+                        "entity_id": entity_id,
+                        "requested_value": raw_value,
+                        "service": service,
+                        "result": result,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            txm.finish(tx_info["tx_dir"], tx_info["tx"], "ok", "Helper value updated")
             return 0
 
         if args.cmd == "helper-delete":
@@ -2201,6 +2414,67 @@ async def run_async(args: argparse.Namespace) -> int:
                 contains=args.contains,
                 limit=args.limit,
             )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
+        if args.cmd == "state-history":
+            from_time = parse_local_datetime_input(args.from_time, "--from-time")
+            to_time = parse_local_datetime_input(args.to_time, "--to-time", default_now=True)
+            if to_time < from_time:
+                raise TalkHaError("--to-time must be >= --from-time")
+            entity_ids = [entity_id.strip() for entity_id in args.entity_ids if entity_id.strip()]
+            if not entity_ids:
+                raise TalkHaError("state-history requires at least one entity_id")
+            entity_filter = ", ".join(sql_quote(entity_id) for entity_id in entity_ids)
+            sql = (
+                "SELECT "
+                "COALESCE(sm.entity_id, s.entity_id), "
+                "s.last_updated_ts, "
+                "COALESCE(s.state, '<null>'), "
+                "COALESCE(os.state, '<null>'), "
+                "COALESCE(HEX(s.context_id_bin), '<null>'), "
+                "COALESCE(s.attributes, '<null>') "
+                "FROM states s "
+                "LEFT JOIN states os ON s.old_state_id = os.state_id "
+                "LEFT JOIN states_meta sm ON s.metadata_id = sm.metadata_id "
+                f"WHERE s.last_updated_ts BETWEEN {from_time.timestamp():.6f} AND {to_time.timestamp():.6f} "
+                f"AND COALESCE(sm.entity_id, s.entity_id) IN ({entity_filter}) "
+                "ORDER BY s.last_updated_ts DESC, s.state_id DESC"
+            )
+            rows = run_recorder_query_via_ssh(base_dir, sql)
+            result = build_state_history(rows, entity_ids, from_time, to_time, args.limit)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
+        if args.cmd == "recent-changes":
+            to_time = parse_local_datetime_input(args.to_time, "--to-time", default_now=True)
+            if args.from_time:
+                from_time = parse_local_datetime_input(args.from_time, "--from-time")
+            else:
+                from_time = to_time - dt.timedelta(minutes=args.minutes)
+            if to_time < from_time:
+                raise TalkHaError("--to-time must be >= --from-time")
+            entity_ids = [entity_id.strip() for entity_id in args.entity_ids if entity_id.strip()]
+            if not entity_ids:
+                raise TalkHaError("recent-changes requires at least one entity_id")
+            entity_filter = ", ".join(sql_quote(entity_id) for entity_id in entity_ids)
+            sql = (
+                "SELECT "
+                "COALESCE(sm.entity_id, s.entity_id), "
+                "s.last_updated_ts, "
+                "COALESCE(s.state, '<null>'), "
+                "COALESCE(os.state, '<null>'), "
+                "COALESCE(HEX(s.context_id_bin), '<null>'), "
+                "COALESCE(s.attributes, '<null>') "
+                "FROM states s "
+                "LEFT JOIN states os ON s.old_state_id = os.state_id "
+                "LEFT JOIN states_meta sm ON s.metadata_id = sm.metadata_id "
+                f"WHERE s.last_updated_ts BETWEEN {from_time.timestamp():.6f} AND {to_time.timestamp():.6f} "
+                f"AND COALESCE(sm.entity_id, s.entity_id) IN ({entity_filter}) "
+                "ORDER BY s.last_updated_ts DESC, s.state_id DESC"
+            )
+            rows = run_recorder_query_via_ssh(base_dir, sql)
+            result = build_recent_changes(rows, entity_ids, from_time, to_time, args.limit)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
 
@@ -2416,6 +2690,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_msgs.add_argument("--limit", type=int, default=200, help="Maximum number of messages to return")
     p_msgs.add_argument("--as-json", action="store_true", help="(reserved)")
 
+    p_shist = sub.add_parser("state-history", help="Return Recorder state history for selected entities")
+    p_shist.add_argument("entity_ids", nargs="+", help="Entity ids to query")
+    p_shist.add_argument("--from-time", required=True, help="Local time, e.g. '2026-04-13 10:00:00'")
+    p_shist.add_argument("--to-time", default="", help="Local time, default: now")
+    p_shist.add_argument("--limit", type=int, default=20, help="Maximum rows per entity")
+    p_shist.add_argument("--as-json", action="store_true", help="(reserved)")
+
+    p_rchg = sub.add_parser("recent-changes", help="Return recent Recorder state changes for selected entities")
+    p_rchg.add_argument("entity_ids", nargs="+", help="Entity ids to query")
+    p_rchg.add_argument("--from-time", default="", help="Local time; overrides --minutes when provided")
+    p_rchg.add_argument("--to-time", default="", help="Local time, default: now")
+    p_rchg.add_argument("--minutes", type=int, default=60, help="Lookback window when --from-time is omitted")
+    p_rchg.add_argument("--limit", type=int, default=20, help="Maximum rows in combined output")
+    p_rchg.add_argument("--as-json", action="store_true", help="(reserved)")
+
     p_cmp = sub.add_parser("compare-spec", help="Compare scripts/automations against YAML spec file")
     p_cmp.add_argument("--spec-file", required=True, help="YAML spec path")
     p_cmp.add_argument("--scripts-file", default="", help="Override scripts.yaml path")
@@ -2450,6 +2739,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_hl.add_argument("--kind", required=True, choices=sorted(HELPER_STORAGE_FILES.keys()))
     p_hl.add_argument("--as-json", action="store_true")
 
+    p_gs = sub.add_parser("get-state", help="Return compact state for one or more entity_ids")
+    p_gs.add_argument("entity_ids", nargs="+", help="Entity ids to fetch")
+    p_gs.add_argument("--with-attributes", action="store_true", help="Include full attributes in JSON output")
+    p_gs.add_argument("--as-json", action="store_true", help="Print JSON instead of tab-separated rows")
+
+    p_lt = sub.add_parser("last-trigger", help="Return last_triggered metadata for one automation")
+    p_lt.add_argument("automation_ref", help="automation.entity_id, automation id, or exact friendly name")
+
     p_ge = sub.add_parser("get-entity", help="Return single entity state by entity_id")
     p_ge.add_argument("--entity-id", required=True)
 
@@ -2462,6 +2759,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_hu.add_argument("--helper", required=True, help="id or entity_id")
     p_hu.add_argument("--item-json", default="{}", help="JSON patch merged into helper item")
     p_hu.add_argument("--explicit-confirm", required=True)
+
+    p_sh = sub.add_parser("set-helper", help="Set value for input_boolean/input_number/input_text")
+    p_sh.add_argument("entity_id", help="Helper entity_id, e.g. input_boolean.test")
+    p_sh.add_argument("value", help="on/off/toggle for input_boolean, number for input_number, raw string for input_text")
+    p_sh.add_argument("--kind", default="", choices=["", "input_boolean", "input_number", "input_text"], help="Optional helper kind override")
+    p_sh.add_argument("--explicit-confirm", required=True)
 
     p_hd = sub.add_parser("helper-delete", help="Delete GUI helper over WebSocket/API")
     p_hd.add_argument("--kind", required=True, choices=sorted(HELPER_STORAGE_FILES.keys()))
