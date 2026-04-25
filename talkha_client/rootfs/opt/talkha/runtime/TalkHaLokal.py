@@ -2000,6 +2000,7 @@ def cmd_diagnoza_automatyzacji(args: argparse.Namespace) -> int:
         "trace": result.get("trace", []),
         "uruchomienia": result.get("uruchomienia", []),
         "analiza_slotow": result.get("analiza_slotow", []),
+        "analiza_triggerow": result.get("analiza_triggerow", []),
         "transakcje": result.get("transakcje", []),
         "fakty": result.get("fakty", []),
         "timeline": result.get("os_czasu", []),

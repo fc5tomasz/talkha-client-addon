@@ -43,6 +43,13 @@ def _read_key_value_file(path: Path) -> Dict[str, str]:
     return out
 
 
+def _runtime_config_file(talkha_runtime: Path) -> Path:
+    cfg = talkha_runtime.parent / ".talkha.env"
+    if cfg.exists():
+        return cfg
+    return DEFAULT_TALKHA_CONFIG
+
+
 def _resolve_ha_creds(config_file: Path = DEFAULT_TALKHA_CONFIG) -> Dict[str, str]:
     cfg = _read_key_value_file(config_file)
     ha_url = os.environ.get("HA_URL", "").strip() or cfg.get("HA_URL", "").strip()
@@ -420,6 +427,40 @@ def _extract_condition_entities(automation: Dict[str, Any]) -> List[str]:
     return sorted(set(entities))
 
 
+def _extract_conditions(automation: Dict[str, Any]) -> List[Dict[str, Any]]:
+    conditions = automation.get("condition") or automation.get("conditions") or []
+    if isinstance(conditions, dict):
+        conditions = [conditions]
+    return [item for item in conditions if isinstance(item, dict)]
+
+
+def _extract_numeric_state_trigger(automation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    triggers = automation.get("trigger") or automation.get("triggers") or []
+    if isinstance(triggers, dict):
+        triggers = [triggers]
+    numeric_triggers: List[Dict[str, Any]] = []
+    for item in triggers:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("trigger", "")).strip() != "numeric_state":
+            continue
+        entity_id = str(item.get("entity_id", "")).strip()
+        if not entity_id:
+            continue
+        above = item.get("above")
+        below = item.get("below")
+        numeric_triggers.append(
+            {
+                "entity_id": entity_id,
+                "above": float(above) if above is not None else None,
+                "below": float(below) if below is not None else None,
+            }
+        )
+    if len(numeric_triggers) != 1:
+        return None
+    return numeric_triggers[0]
+
+
 def _match_triggered_slot(slot: dt.datetime, events: List[Dict[str, Any]], tolerance_seconds: int = 90) -> Optional[Dict[str, Any]]:
     for event in events:
         when = event.get("when")
@@ -497,11 +538,179 @@ def _evaluate_condition_at(
     return {"ok": True, "reason": ""}
 
 
+def _max_condition_duration(conditions: List[Dict[str, Any]]) -> dt.timedelta:
+    max_duration = dt.timedelta(0)
+    for condition in conditions:
+        duration = _parse_duration_text(str(condition.get("for", "")))
+        if duration is not None and duration > max_duration:
+            max_duration = duration
+    return max_duration
+
+
+def _parse_numeric_state_value(row: Optional[Dict[str, Any]]) -> Optional[float]:
+    if row is None:
+        return None
+    try:
+        return float(str(row.get("state")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _numeric_state_satisfied(value: Optional[float], trigger: Dict[str, Any]) -> bool:
+    if value is None:
+        return False
+    above = trigger.get("above")
+    below = trigger.get("below")
+    if above is not None and not (value > float(above)):
+        return False
+    if below is not None and not (value < float(below)):
+        return False
+    return True
+
+
+def _numeric_crosses_threshold(previous: float, current: float, trigger: Dict[str, Any]) -> bool:
+    above = trigger.get("above")
+    below = trigger.get("below")
+    if above is not None and previous <= float(above) < current:
+        return True
+    if below is not None and previous >= float(below) > current:
+        return True
+    return False
+
+
+def _condition_candidate_times(
+    conditions: List[Dict[str, Any]],
+    history: Dict[str, List[Dict[str, Any]]],
+    from_dt: dt.datetime,
+    to_dt: dt.datetime,
+) -> List[dt.datetime]:
+    candidates = {from_dt, to_dt}
+    for condition in conditions:
+        entity_id = str(condition.get("entity_id", "")).strip()
+        if not entity_id:
+            continue
+        duration = _parse_duration_text(str(condition.get("for", "")))
+        for row in history.get(entity_id, []):
+            when = row.get("when")
+            if when is None:
+                continue
+            if from_dt <= when <= to_dt:
+                candidates.add(when)
+            if duration is not None:
+                ready_at = when + duration
+                if from_dt <= ready_at <= to_dt:
+                    candidates.add(ready_at)
+    return sorted(candidates)
+
+
+def _find_conditions_ready_since(
+    conditions: List[Dict[str, Any]],
+    history: Dict[str, List[Dict[str, Any]]],
+    from_dt: dt.datetime,
+    to_dt: dt.datetime,
+) -> Optional[dt.datetime]:
+    if not conditions:
+        return from_dt
+    for candidate in _condition_candidate_times(conditions, history, from_dt, to_dt):
+        if all(_evaluate_condition_at(condition, candidate, history).get("ok", False) for condition in conditions):
+            return candidate
+    return None
+
+
+def _collect_numeric_crossings(
+    series: List[Dict[str, Any]],
+    trigger: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    crossings: List[Dict[str, Any]] = []
+    previous_value: Optional[float] = None
+    previous_when: Optional[dt.datetime] = None
+    for row in series:
+        current_value = _parse_numeric_state_value(row)
+        current_when = row.get("when")
+        if current_value is None or current_when is None:
+            continue
+        if previous_value is not None and _numeric_crosses_threshold(previous_value, current_value, trigger):
+            crossings.append(
+                {
+                    "when": current_when,
+                    "from_value": previous_value,
+                    "to_value": current_value,
+                    "previous_when": previous_when.isoformat() if previous_when else None,
+                }
+            )
+        previous_value = current_value
+        previous_when = current_when
+    return crossings
+
+
+def _analyze_numeric_state_gap(
+    automation: Optional[Dict[str, Any]],
+    entity_id: str,
+    from_dt: Optional[dt.datetime],
+    to_dt: Optional[dt.datetime],
+    config_file: Path = DEFAULT_TALKHA_CONFIG,
+) -> Optional[Dict[str, Any]]:
+    if automation is None or from_dt is None or to_dt is None or not entity_id:
+        return None
+    trigger = _extract_numeric_state_trigger(automation)
+    if trigger is None:
+        return None
+
+    conditions = _extract_conditions(automation)
+    lead_time = max(dt.timedelta(hours=1), _max_condition_duration(conditions) + dt.timedelta(hours=1))
+    history_entities = sorted(set(_extract_condition_entities(automation) + [trigger["entity_id"]]))
+    history = _fetch_history_series(history_entities, from_dt - lead_time, to_dt, config_file=config_file)
+    ready_since = _find_conditions_ready_since(conditions, history, from_dt, to_dt)
+    if ready_since is None:
+        return None
+
+    trigger_series = history.get(trigger["entity_id"], [])
+    trigger_row_at_ready = _get_state_at(trigger_series, ready_since)
+    ready_value = _parse_numeric_state_value(trigger_row_at_ready)
+    ready_already_satisfied = _numeric_state_satisfied(ready_value, trigger)
+    crossings = _collect_numeric_crossings(trigger_series, trigger)
+    crossings_after_ready = [row for row in crossings if row.get("when") and row["when"] > ready_since]
+    last_crossing_before_ready = [row for row in crossings if row.get("when") and row["when"] <= ready_since]
+    latest_before_ready = last_crossing_before_ready[-1] if last_crossing_before_ready else None
+
+    if not ready_already_satisfied or crossings_after_ready:
+        return None
+
+    threshold_text = f">{trigger['above']}" if trigger.get("above") is not None else f"<{trigger['below']}"
+    reason = (
+        f"Warunki automatyzacji były spełnione od {ready_since.isoformat()}, ale {trigger['entity_id']} "
+        f"już wtedy miało wartość {ready_value} i spełniało próg {threshold_text}. "
+        "Po tej chwili nie było nowego przejścia przez próg, więc trigger numeric_state nie odpalił ponownie."
+    )
+    payload: Dict[str, Any] = {
+        "alias": str(automation.get("alias", "")),
+        "id": str(automation.get("id", "")),
+        "entity_id": entity_id,
+        "trigger_type": "numeric_state",
+        "trigger_entity_id": trigger["entity_id"],
+        "threshold": {"above": trigger.get("above"), "below": trigger.get("below")},
+        "conditions_ready_since": ready_since.isoformat(),
+        "trigger_value_at_ready": ready_value,
+        "trigger_already_satisfied_at_ready": True,
+        "crossings_after_ready": [],
+        "likely_root_cause": "threshold_already_satisfied_before_conditions",
+        "reason": reason,
+    }
+    if latest_before_ready:
+        payload["last_crossing_before_ready"] = {
+            "when": latest_before_ready["when"].isoformat(),
+            "from_value": latest_before_ready.get("from_value"),
+            "to_value": latest_before_ready.get("to_value"),
+        }
+    return payload
+
+
 def _analyze_automation_slots(
     automation: Optional[Dict[str, Any]],
     entity_id: str,
     from_dt: Optional[dt.datetime],
     to_dt: Optional[dt.datetime],
+    config_file: Path = DEFAULT_TALKHA_CONFIG,
 ) -> List[Dict[str, Any]]:
     if automation is None or from_dt is None or to_dt is None or not entity_id:
         return []
@@ -538,8 +747,8 @@ def _analyze_automation_slots(
     if isinstance(conditions, dict):
         conditions = [conditions]
     history_entities = _extract_condition_entities(automation)
-    history = _fetch_history_series(history_entities, from_dt - dt.timedelta(hours=1), to_dt)
-    events = _fetch_logbook_events(entity_id, from_dt, to_dt)
+    history = _fetch_history_series(history_entities, from_dt - dt.timedelta(hours=1), to_dt, config_file=config_file)
+    events = _fetch_logbook_events(entity_id, from_dt, to_dt, config_file=config_file)
 
     candidate_slots: Dict[str, Dict[str, Any]] = {}
     if interval_minutes:
@@ -810,9 +1019,14 @@ def _build_conclusion(
     states: List[Dict[str, Any]],
     traces: List[Dict[str, Any]],
     missing_evidence: List[str],
+    trigger_analysis: List[Dict[str, Any]],
 ) -> str:
     if not matches["automations"] and not matches["scripts"] and not matches["entities"]:
         return "Brak dopasowań, więc narzędzie nie znalazło materiału do dochodzenia."
+
+    for row in trigger_analysis:
+        if row.get("likely_root_cause") == "threshold_already_satisfied_before_conditions":
+            return str(row.get("reason") or "")
 
     for row in states:
         if row.get("entity_id") == "device_tracker.iphone15pro" and row.get("state") == "not_home":
@@ -856,13 +1070,15 @@ def run_investigation(
     tx_rows = _collect_tx(query, state_dir, from_dt, to_dt, tx_limit)
     uruchomienia: List[Dict[str, Any]] = []
     analiza_slotow: List[Dict[str, Any]] = []
+    analiza_triggerow: List[Dict[str, Any]] = []
+    config_file = _runtime_config_file(talkha_runtime)
     for row in matches["automations"][:10]:
         automation_id = row.get("id", "")
         runtime_row = _find_automation_runtime_state(runtime_states, automation_id)
         entity_id = str((runtime_row or {}).get("entity_id", ""))
         if not entity_id:
             continue
-        count_payload = _fetch_logbook_count(entity_id, from_dt, to_dt)
+        count_payload = _fetch_logbook_count(entity_id, from_dt, to_dt, config_file=config_file)
         uruchomienia.append(
             {
                 "alias": row.get("alias"),
@@ -872,7 +1088,7 @@ def run_investigation(
             }
         )
         full_automation = _load_full_automation(automation_id, automations_file)
-        slot_rows = _analyze_automation_slots(full_automation, entity_id, from_dt, to_dt)
+        slot_rows = _analyze_automation_slots(full_automation, entity_id, from_dt, to_dt, config_file=config_file)
         if slot_rows:
             analiza_slotow.append(
                 {
@@ -882,10 +1098,16 @@ def run_investigation(
                     "slots": slot_rows[:80],
                 }
             )
+        trigger_gap = _analyze_numeric_state_gap(full_automation, entity_id, from_dt, to_dt, config_file=config_file)
+        if trigger_gap:
+            analiza_triggerow.append(trigger_gap)
     facts = _build_facts(matches, states, traces)
+    for row in analiza_triggerow:
+        facts.append(str(row.get("reason", "")))
+    facts = facts[:12]
     timeline = _build_timeline(states, traces)
     missing_evidence = _build_missing_evidence(matches, traces, from_time, to_time)
-    conclusion = _build_conclusion(matches, states, traces, missing_evidence)
+    conclusion = _build_conclusion(matches, states, traces, missing_evidence, analiza_triggerow)
     return {
         "zapytanie": query,
         "okno_czasu": {"od": from_time or None, "do": to_time or None},
@@ -898,6 +1120,7 @@ def run_investigation(
         "trace": traces,
         "uruchomienia": uruchomienia,
         "analiza_slotow": analiza_slotow,
+        "analiza_triggerow": analiza_triggerow,
         "transakcje": tx_rows,
         "fakty": facts,
         "os_czasu": timeline,

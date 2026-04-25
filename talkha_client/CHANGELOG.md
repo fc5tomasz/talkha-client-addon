@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.28
+- Improved: `diagnoza-automatyzacji` now detects a practical `numeric_state` failure mode where the threshold was already satisfied before the remaining conditions became true, and reports it directly as the likely root cause instead of leaving only raw traces and state dumps.
+
 ## 0.2.27
 - Improved: `diagnoza-automatyzacji` now returns `analiza_slotow` not only for `time_pattern`, but also for fixed `trigger: time` schedules such as `00:00`, `02:30`, `05:00`.
 
