@@ -22,3 +22,4 @@ Autor: Tomasz Furdal, ha-expert.com
 - `operator_url` wskazuje osiagalny adres operatora, np. tunel, domene albo publiczny endpoint
 - po stronie operatora warto po instalacji uruchomic kontrolny test `hx doctor`
 - zdalny runtime udostepnia teraz tez `get-state`, `last-trigger`, `state-history`, `recent-changes`, `set-helper` oraz `where-used`
+- `diagnoza-automatyzacji` rozbija teraz sloty zarowno dla harmonogramow `time_pattern`, jak i dla stalych triggerow `time`

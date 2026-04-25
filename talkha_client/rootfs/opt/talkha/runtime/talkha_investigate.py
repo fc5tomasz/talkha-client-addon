@@ -380,6 +380,24 @@ def _parse_hhmmss(value: str) -> Optional[int]:
     return hours * 60 + minutes
 
 
+def _parse_clock_time(value: Any) -> Optional[dt.time]:
+    raw = str(value or "").strip().strip("'").strip('"')
+    if not raw:
+        return None
+    parts = raw.split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = int(parts[2]) if len(parts) == 3 else 0
+    except ValueError:
+        return None
+    if hours < 0 or hours > 23 or minutes < 0 or minutes > 59 or seconds < 0 or seconds > 59:
+        return None
+    return dt.time(hour=hours, minute=minutes, second=seconds)
+
+
 def _load_full_automation(target_id: str, automations_file: Path) -> Optional[Dict[str, Any]]:
     rows = _read_yaml(automations_file) or []
     for item in rows:
@@ -491,19 +509,29 @@ def _analyze_automation_slots(
     if isinstance(triggers, dict):
         triggers = [triggers]
     interval_minutes: Optional[int] = None
+    fixed_times: List[dt.time] = []
     for item in triggers:
         if not isinstance(item, dict):
             continue
-        if str(item.get("trigger", "")) != "time_pattern":
-            continue
-        minutes_spec = str(item.get("minutes", "")).strip()
-        if minutes_spec.startswith("/"):
-            try:
-                interval_minutes = int(minutes_spec[1:])
-            except ValueError:
-                interval_minutes = None
-            break
-    if not interval_minutes:
+        trigger_type = str(item.get("trigger", "")).strip()
+        if trigger_type == "time_pattern":
+            minutes_spec = str(item.get("minutes", "")).strip()
+            if minutes_spec.startswith("/"):
+                try:
+                    interval_minutes = int(minutes_spec[1:])
+                except ValueError:
+                    interval_minutes = None
+        elif trigger_type == "time":
+            raw_times = item.get("at")
+            if isinstance(raw_times, (list, tuple)):
+                values = raw_times
+            else:
+                values = [raw_times]
+            for value in values:
+                parsed = _parse_clock_time(value)
+                if parsed is not None:
+                    fixed_times.append(parsed)
+    if not interval_minutes and not fixed_times:
         return []
 
     conditions = automation.get("condition") or automation.get("conditions") or []
@@ -513,43 +541,62 @@ def _analyze_automation_slots(
     history = _fetch_history_series(history_entities, from_dt - dt.timedelta(hours=1), to_dt)
     events = _fetch_logbook_events(entity_id, from_dt, to_dt)
 
-    slots: List[Dict[str, Any]] = []
-    cursor = from_dt.replace(second=0, microsecond=0)
-    while cursor <= to_dt:
-        local_cursor = cursor.astimezone(LOCAL_TZ)
-        minute = local_cursor.minute
-        if minute % interval_minutes == 0:
-            reasons: List[str] = []
-            passed_all = True
-            for condition in conditions:
-                if not isinstance(condition, dict):
+    candidate_slots: Dict[str, Dict[str, Any]] = {}
+    if interval_minutes:
+        cursor = from_dt.replace(second=0, microsecond=0)
+        while cursor <= to_dt:
+            local_cursor = cursor.astimezone(LOCAL_TZ)
+            if local_cursor.minute % interval_minutes == 0:
+                candidate_slots[cursor.isoformat()] = {"slot_dt": cursor, "trigger_type": "time_pattern"}
+            cursor += dt.timedelta(minutes=1)
+    if fixed_times:
+        start_local = from_dt.astimezone(LOCAL_TZ)
+        end_local = to_dt.astimezone(LOCAL_TZ)
+        current_date = start_local.date()
+        end_date = end_local.date()
+        while current_date <= end_date:
+            for trigger_time in fixed_times:
+                slot_local = dt.datetime.combine(current_date, trigger_time, tzinfo=LOCAL_TZ)
+                if slot_local < from_dt or slot_local > to_dt:
                     continue
-                verdict = _evaluate_condition_at(condition, cursor, history)
-                if not verdict.get("ok", False):
-                    passed_all = False
-                    reasons.append(str(verdict.get("reason", "condition failed")))
-            if passed_all:
-                matched_event = _match_triggered_slot(cursor, events)
-                slots.append(
-                    {
-                        "slot": cursor.isoformat(),
-                        "trigger_candidate": True,
-                        "conditions_ok": True,
-                        "triggered": matched_event is not None,
-                        "message": (matched_event or {}).get("message", ""),
-                    }
-                )
-            elif reasons:
-                slots.append(
-                    {
-                        "slot": cursor.isoformat(),
-                        "trigger_candidate": True,
-                        "conditions_ok": False,
-                        "triggered": False,
-                        "blocked_by": reasons,
-                    }
-                )
-        cursor += dt.timedelta(minutes=1)
+                candidate_slots[slot_local.isoformat()] = {"slot_dt": slot_local, "trigger_type": "time"}
+            current_date += dt.timedelta(days=1)
+
+    slots: List[Dict[str, Any]] = []
+    for slot_info in sorted(candidate_slots.values(), key=lambda item: item["slot_dt"]):
+        slot_dt = slot_info["slot_dt"]
+        reasons: List[str] = []
+        passed_all = True
+        for condition in conditions:
+            if not isinstance(condition, dict):
+                continue
+            verdict = _evaluate_condition_at(condition, slot_dt, history)
+            if not verdict.get("ok", False):
+                passed_all = False
+                reasons.append(str(verdict.get("reason", "condition failed")))
+        if passed_all:
+            matched_event = _match_triggered_slot(slot_dt, events)
+            slots.append(
+                {
+                    "slot": slot_dt.isoformat(),
+                    "trigger_type": slot_info["trigger_type"],
+                    "trigger_candidate": True,
+                    "conditions_ok": True,
+                    "triggered": matched_event is not None,
+                    "message": (matched_event or {}).get("message", ""),
+                }
+            )
+        elif reasons:
+            slots.append(
+                {
+                    "slot": slot_dt.isoformat(),
+                    "trigger_type": slot_info["trigger_type"],
+                    "trigger_candidate": True,
+                    "conditions_ok": False,
+                    "triggered": False,
+                    "blocked_by": reasons,
+                }
+            )
     return slots
 
 

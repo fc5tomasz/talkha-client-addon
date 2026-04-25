@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.27
+- Improved: `diagnoza-automatyzacji` now returns `analiza_slotow` not only for `time_pattern`, but also for fixed `trigger: time` schedules such as `00:00`, `02:30`, `05:00`.
+
 ## 0.2.26
 - New: remote `TalkHa.py` now supports `get-state`, `last-trigger`, `state-history`, `recent-changes` and `set-helper`, so the client runtime exposes the same core runtime diagnostics that are already standard in the local Ubuntu workflow.
 - New: remote `TalkHaLokal.py` now supports `where-used --entity ...`, so exact entity usage in automations, scripts and Lovelace no longer requires manual grep or SSH on the client side.
