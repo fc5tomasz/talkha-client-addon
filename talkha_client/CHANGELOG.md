@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.31
+- Improved: `diagnoza-automatyzacji` now reports a second `numeric_state` failure mode where the remaining conditions become true only after the sensor has already fallen back below the threshold, and there is no new crossing afterwards. This makes the conclusion explicit even when there is no saved trace in the selected time window.
+
 ## 0.2.30
 - Improved: compact operator payloads are now the default path for `automation-summary`, `script-summary`, `entity-thresholds`, `threshold-check`, `diagnoza-automatyzacji` and `tx-report`, so common diagnostics and transaction reports stay high-signal without flooding the operator with raw YAML or low-value metadata.
 - New: remote mutation workflow now supports both `helper-upsert` and `helper-delete` with backup-aware transaction tracking, so automations, scripts and GUI helpers can all be managed through the client add-on without SSH.

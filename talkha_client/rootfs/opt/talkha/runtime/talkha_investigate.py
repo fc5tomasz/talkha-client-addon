@@ -578,6 +578,24 @@ def _numeric_crosses_threshold(previous: float, current: float, trigger: Dict[st
     return False
 
 
+def _numeric_crossing_direction(previous: float, current: float, trigger: Dict[str, Any]) -> Optional[str]:
+    above = trigger.get("above")
+    below = trigger.get("below")
+    if above is not None:
+        threshold = float(above)
+        if previous <= threshold < current:
+            return "up"
+        if previous > threshold >= current:
+            return "down"
+    if below is not None:
+        threshold = float(below)
+        if previous >= threshold > current:
+            return "down"
+        if previous < threshold <= current:
+            return "up"
+    return None
+
+
 def _condition_candidate_times(
     conditions: List[Dict[str, Any]],
     history: Dict[str, List[Dict[str, Any]]],
@@ -629,13 +647,18 @@ def _collect_numeric_crossings(
         current_when = row.get("when")
         if current_value is None or current_when is None:
             continue
-        if previous_value is not None and _numeric_crosses_threshold(previous_value, current_value, trigger):
+        direction = None
+        if previous_value is not None:
+            direction = _numeric_crossing_direction(previous_value, current_value, trigger)
+        if direction is not None:
             crossings.append(
                 {
                     "when": current_when,
                     "from_value": previous_value,
                     "to_value": current_value,
                     "previous_when": previous_when.isoformat() if previous_when else None,
+                    "direction": direction,
+                    "trigger_firing": _numeric_crosses_threshold(previous_value, current_value, trigger),
                 }
             )
         previous_value = current_value
@@ -669,40 +692,83 @@ def _analyze_numeric_state_gap(
     ready_value = _parse_numeric_state_value(trigger_row_at_ready)
     ready_already_satisfied = _numeric_state_satisfied(ready_value, trigger)
     crossings = _collect_numeric_crossings(trigger_series, trigger)
-    crossings_after_ready = [row for row in crossings if row.get("when") and row["when"] > ready_since]
+    trigger_crossings_after_ready = [
+        row for row in crossings if row.get("when") and row["when"] > ready_since and row.get("trigger_firing")
+    ]
     last_crossing_before_ready = [row for row in crossings if row.get("when") and row["when"] <= ready_since]
     latest_before_ready = last_crossing_before_ready[-1] if last_crossing_before_ready else None
 
-    if not ready_already_satisfied or crossings_after_ready:
-        return None
-
-    threshold_text = f">{trigger['above']}" if trigger.get("above") is not None else f"<{trigger['below']}"
-    reason = (
-        f"Warunki automatyzacji były spełnione od {ready_since.isoformat()}, ale {trigger['entity_id']} "
-        f"już wtedy miało wartość {ready_value} i spełniało próg {threshold_text}. "
-        "Po tej chwili nie było nowego przejścia przez próg, więc trigger numeric_state nie odpalił ponownie."
-    )
-    payload: Dict[str, Any] = {
-        "alias": str(automation.get("alias", "")),
-        "id": str(automation.get("id", "")),
-        "entity_id": entity_id,
-        "trigger_type": "numeric_state",
-        "trigger_entity_id": trigger["entity_id"],
-        "threshold": {"above": trigger.get("above"), "below": trigger.get("below")},
-        "conditions_ready_since": ready_since.isoformat(),
-        "trigger_value_at_ready": ready_value,
-        "trigger_already_satisfied_at_ready": True,
-        "crossings_after_ready": [],
-        "likely_root_cause": "threshold_already_satisfied_before_conditions",
-        "reason": reason,
-    }
-    if latest_before_ready:
-        payload["last_crossing_before_ready"] = {
-            "when": latest_before_ready["when"].isoformat(),
-            "from_value": latest_before_ready.get("from_value"),
-            "to_value": latest_before_ready.get("to_value"),
+    if ready_already_satisfied and not trigger_crossings_after_ready:
+        threshold_text = f">{trigger['above']}" if trigger.get("above") is not None else f"<{trigger['below']}"
+        reason = (
+            f"Warunki automatyzacji były spełnione od {ready_since.isoformat()}, ale {trigger['entity_id']} "
+            f"już wtedy miało wartość {ready_value} i spełniało próg {threshold_text}. "
+            "Po tej chwili nie było nowego przejścia przez próg, więc trigger numeric_state nie odpalił ponownie."
+        )
+        payload = {
+            "alias": str(automation.get("alias", "")),
+            "id": str(automation.get("id", "")),
+            "entity_id": entity_id,
+            "trigger_type": "numeric_state",
+            "trigger_entity_id": trigger["entity_id"],
+            "threshold": {"above": trigger.get("above"), "below": trigger.get("below")},
+            "conditions_ready_since": ready_since.isoformat(),
+            "trigger_value_at_ready": ready_value,
+            "trigger_already_satisfied_at_ready": True,
+            "crossings_after_ready": [],
+            "likely_root_cause": "threshold_already_satisfied_before_conditions",
+            "reason": reason,
         }
-    return payload
+        if latest_before_ready:
+            payload["last_crossing_before_ready"] = {
+                "when": latest_before_ready["when"].isoformat(),
+                "from_value": latest_before_ready.get("from_value"),
+                "to_value": latest_before_ready.get("to_value"),
+                "direction": latest_before_ready.get("direction"),
+            }
+        return payload
+
+    if (not ready_already_satisfied) and not trigger_crossings_after_ready:
+        threshold_text = f">{trigger['above']}" if trigger.get("above") is not None else f"<{trigger['below']}"
+        reason = (
+            f"Warunki automatyzacji były spełnione od {ready_since.isoformat()}, ale {trigger['entity_id']} "
+            f"miało wtedy wartość {ready_value} i nie spełniało progu {threshold_text}. "
+            "Po tej chwili nie było nowego przejścia przez próg, więc trigger numeric_state nie odpalił."
+        )
+        if latest_before_ready and latest_before_ready.get("direction"):
+            direction_label = "w górę" if latest_before_ready.get("direction") == "up" else "w dół"
+            reason += (
+                f" Ostatnie przejście przez granicę przed gotowością warunków było {direction_label}: "
+                f"{latest_before_ready.get('from_value')} -> {latest_before_ready.get('to_value')} "
+                f"o {latest_before_ready['when'].isoformat()}."
+            )
+        payload = {
+            "alias": str(automation.get("alias", "")),
+            "id": str(automation.get("id", "")),
+            "entity_id": entity_id,
+            "trigger_type": "numeric_state",
+            "trigger_entity_id": trigger["entity_id"],
+            "threshold": {"above": trigger.get("above"), "below": trigger.get("below")},
+            "conditions_ready_since": ready_since.isoformat(),
+            "trigger_value_at_ready": ready_value,
+            "trigger_already_satisfied_at_ready": False,
+            "crossings_after_ready": [],
+            "likely_root_cause": "no_threshold_crossing_after_conditions",
+            "reason": reason,
+        }
+        if latest_before_ready:
+            payload["last_crossing_before_ready"] = {
+                "when": latest_before_ready["when"].isoformat(),
+                "from_value": latest_before_ready.get("from_value"),
+                "to_value": latest_before_ready.get("to_value"),
+                "direction": latest_before_ready.get("direction"),
+                "trigger_firing": latest_before_ready.get("trigger_firing"),
+            }
+        return payload
+
+    if trigger_crossings_after_ready:
+        return None
+    return None
 
 
 def _analyze_automation_slots(
@@ -1025,7 +1091,10 @@ def _build_conclusion(
         return "Brak dopasowań, więc narzędzie nie znalazło materiału do dochodzenia."
 
     for row in trigger_analysis:
-        if row.get("likely_root_cause") == "threshold_already_satisfied_before_conditions":
+        if row.get("likely_root_cause") in {
+            "threshold_already_satisfied_before_conditions",
+            "no_threshold_crossing_after_conditions",
+        }:
             return str(row.get("reason") or "")
 
     for row in states:
